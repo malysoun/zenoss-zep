@@ -62,7 +62,7 @@
                 <zep.jdbc.hostname>localhost</zep.jdbc.hostname>
                 <zep.jdbc.port>3306</zep.jdbc.port>
                 <zep.jdbc.admin.username>root</zep.jdbc.admin.username>
-                <zep.jdbc.admin.password></zep.jdbc.admin.password>
+                <zep.jdbc.admin.password/>
                 <zep.jdbc.username>zenoss</zep.jdbc.username>
                 <zep.jdbc.password>zenoss</zep.jdbc.password>
             </properties>
