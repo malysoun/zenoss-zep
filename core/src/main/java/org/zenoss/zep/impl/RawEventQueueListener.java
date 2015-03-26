@@ -1,15 +1,16 @@
 /*****************************************************************************
- * 
+ *
  * Copyright (C) Zenoss, Inc. 2010, all rights reserved.
- * 
+ *
  * This content is made available according to terms specified in
  * License.zenoss under the directory where your Zenoss product is installed.
- * 
+ *
  ****************************************************************************/
 
 
 package org.zenoss.zep.impl;
 
+import com.google.protobuf.Message;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.context.ApplicationEventPublisher;
@@ -21,8 +22,11 @@ import org.zenoss.protobufs.zep.Zep.ZepRawEvent;
 import org.zenoss.zep.EventProcessor;
 import org.zenoss.zep.events.EventIndexQueueSizeEvent;
 
+import java.util.Collection;
+import java.util.List;
+
 public class RawEventQueueListener extends AbstractQueueListener
-    implements ApplicationListener<EventIndexQueueSizeEvent>, ApplicationEventPublisherAware {
+        implements ApplicationListener<EventIndexQueueSizeEvent>, ApplicationEventPublisherAware {
 
     private static final Logger logger = LoggerFactory.getLogger(RawEventQueueListener.class);
 
@@ -33,7 +37,7 @@ public class RawEventQueueListener extends AbstractQueueListener
     public void setPrefetchCount(int prefetchCount) {
         this.prefetchCount = prefetchCount;
     }
-    
+
     private boolean throttleConsumer = true;
     private volatile boolean indexQueueLag = false;
     private int indexQueueThreshold = 100000;
@@ -108,5 +112,26 @@ public class RawEventQueueListener extends AbstractQueueListener
             }
             this.eventProcessor.processEvent((ZepRawEvent) message);
         }
+    }
+
+    @Override
+    protected void handleBatch(Collection<org.zenoss.amqp.Message<Message>> messages, List<org.zenoss.amqp.Message<Message>> succeeded, List<org.zenoss.amqp.Message<Message>> failed) throws Exception {
+        Exception lastException = null;
+
+        for (org.zenoss.amqp.Message<Message> message : messages) {
+            try {
+                handle(message.getBody());
+                succeeded.add(message);
+            } catch (Exception e) {
+                failed.add(message);
+                lastException = e;
+            }
+        }
+
+        if (lastException != null) {
+            throw lastException;
+        }
+        return;
+
     }
 }
