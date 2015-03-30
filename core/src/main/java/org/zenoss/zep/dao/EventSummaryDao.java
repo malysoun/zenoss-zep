@@ -11,17 +11,30 @@
 package org.zenoss.zep.dao;
 
 import org.zenoss.protobufs.model.Model.ModelElementType;
+import org.zenoss.protobufs.zep.Zep.Event;
 import org.zenoss.protobufs.zep.Zep.EventSeverity;
 import org.zenoss.protobufs.zep.Zep.EventStatus;
 import org.zenoss.zep.ZepException;
 
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.TimeUnit;
 
 /**
  * DAO which provides an interface to the event summary table.
  */
 public interface EventSummaryDao extends EventSummaryBaseDao {
+
+    /**
+     * Creates or updates a set of summary entries in the event summary table for the
+     * specified set of event occurrences.
+     *
+     * @param eventList A list of events with create contexts.
+     * @return A list of uuid/Event tuples for the created (or updated) events. The list has the same order as eventList.
+     * @throws org.zenoss.zep.ZepException If an error occurs.
+     */
+    public List<Map.Entry<String, Event>> batchCreate(List<EventWithContext> eventList) throws ZepException;
+
     /**
      * Updates event summaries recorded with null device UUIDs, after
      * receiving a ModelChange event for the device's addition - sets the

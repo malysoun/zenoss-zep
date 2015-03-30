@@ -49,6 +49,7 @@ import org.zenoss.zep.annotations.TransactionalRollbackAllExceptions;
 import org.zenoss.zep.dao.EventBatch;
 import org.zenoss.zep.dao.EventBatchParams;
 import org.zenoss.zep.dao.EventSummaryDao;
+import org.zenoss.zep.dao.EventWithContext;
 import org.zenoss.zep.dao.impl.compat.DatabaseCompatibility;
 import org.zenoss.zep.dao.impl.compat.DatabaseType;
 import org.zenoss.zep.dao.impl.compat.NestedTransactionCallback;
@@ -202,6 +203,14 @@ public class EventSummaryDaoImpl implements EventSummaryDao {
     @Timed
     @TransactionalRollbackAllExceptions
     public String create(Event event, final EventPreCreateContext context) throws ZepException {
+        return createEvent(event, context);
+    }
+
+    private String createEvent(EventWithContext eventWithContext) throws ZepException {
+        return createEvent(eventWithContext.getEvent(), eventWithContext.getContext());
+    }
+
+    private String createEvent(Event event, final EventPreCreateContext context) throws ZepException {
 
         /*
          * Clear events are dropped if they don't clear any corresponding events.
@@ -325,6 +334,33 @@ public class EventSummaryDaoImpl implements EventSummaryDao {
             throw new ZepException(e);
         }
         return uuid;
+    }
+
+    @Timed
+    @TransactionalRollbackAllExceptions
+    @Override
+    public List<Map.Entry<String, Event>> batchCreate(List<EventWithContext> eventList) throws ZepException {
+        List<Map.Entry<String, Event>> results = new ArrayList<Map.Entry<String, Event>>();
+
+        for (EventWithContext eventWithContext : eventList) {
+            String uuid;
+            try {
+                uuid = createEvent(eventWithContext);
+            } catch (DuplicateKeyException e) {
+                // Catch DuplicateKeyException and retry creating the event. Otherwise, the failure
+                // will propagate to the AMQP consumer, the message will be rejected (and re-queued),
+                // leading to unnecessary load on the AMQP server re-queueing/re-delivering the event.
+                if (logger.isDebugEnabled()) {
+                    logger.info("DuplicateKeyException - retrying event: {}", eventWithContext.getEvent());
+                } else {
+                    logger.info("DuplicateKeyException - retrying event: {}", eventWithContext.getEvent().getUuid());
+                }
+                uuid = createEvent(eventWithContext);
+            }
+            Map.Entry<String, Event> result = new AbstractMap.SimpleEntry<String, Event>(uuid, eventWithContext.getEvent());
+            results.add(result);
+        }
+        return results;
     }
 
     private Map<String,Object> getInsertFields(EventSummaryOrBuilder summary, EventPreCreateContext context,

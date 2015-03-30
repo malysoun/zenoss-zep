@@ -67,6 +67,7 @@
         <property name="throttleConsumer" value="${zep.index.throttle:true}" />
         <property name="indexQueueThreshold" value="${zep.index.throttle_threshold:100000}"/>
         <property name="consumerSleepTime" value="${zep.index.throttle_sleep:100}"/>
+        <property name="batchSize" value="${zep.index.batch_size:10}"/>
     </bean>
 
     <bean id="modelChangeEventQueueListener" class="org.zenoss.zep.impl.ModelChangeEventQueueListener"

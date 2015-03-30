@@ -116,22 +116,18 @@ public class RawEventQueueListener extends AbstractQueueListener
 
     @Override
     protected void handleBatch(Collection<org.zenoss.amqp.Message<Message>> messages, List<org.zenoss.amqp.Message<Message>> succeeded, List<org.zenoss.amqp.Message<Message>> failed) throws Exception {
-        Exception lastException = null;
-
-        for (org.zenoss.amqp.Message<Message> message : messages) {
-            try {
-                handle(message.getBody());
-                succeeded.add(message);
-            } catch (Exception e) {
-                failed.add(message);
-                lastException = e;
-            }
+        if (this.indexQueueLag && this.throttleConsumer) {
+            Thread.sleep(this.consumerSleepTime);
         }
 
-        if (lastException != null) {
-            throw lastException;
+        // Assume processEventMessages() is an all or nothing operation
+        try {
+            logger.debug("handleBatch: count={} batchSize={}", messages.size(), batchSize);
+            this.eventProcessor.processEventMessages(messages);
+            succeeded.addAll(messages);
+        } catch (Exception e) {
+            failed.addAll(messages);
+            throw e;
         }
-        return;
-
     }
 }
