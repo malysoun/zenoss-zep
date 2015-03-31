@@ -219,7 +219,8 @@ public class RawEventQueueListener extends AbstractQueueListener
     private void handleMessages(Collection<org.zenoss.amqp.Message<Message>> messages) throws Exception {
 
         //
-        // FIXME: Does it make mroe sense to move this into the receive() method?
+        // FIXME: Does it make more sense to move this into the receive() method?
+        //          The distinction here is that we're on a different thread from receive()
         if (this.indexQueueLag && this.throttleConsumer) {
             Thread.sleep(this.consumerSleepTime);
         }

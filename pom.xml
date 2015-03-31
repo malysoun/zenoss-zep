@@ -33,7 +33,7 @@
         <version.spring>3.0.5.RELEASE</version.spring>
         <version.tomcat-jdbc>7.0.27</version.tomcat-jdbc>
         <zenoss-utils.version>2.0.2</zenoss-utils.version>
-        <zenoss-protocols.version>2.1.1</zenoss-protocols.version>
+        <zenoss-protocols.version>2.1.0</zenoss-protocols.version>
         <metric-consumer.version>0.0.12</metric-consumer.version>
     </properties>
     <profiles>
