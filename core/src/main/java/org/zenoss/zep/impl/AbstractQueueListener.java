@@ -16,7 +16,6 @@ import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.dao.TransientDataAccessException;
 import org.zenoss.amqp.AmqpException;
-import org.zenoss.amqp.BatchingQueueListener;
 import org.zenoss.amqp.Consumer;
 import org.zenoss.amqp.Message;
 import org.zenoss.amqp.QueueListener;
@@ -26,7 +25,7 @@ import org.zenoss.zep.dao.impl.DaoUtils;
 import java.util.concurrent.Callable;
 import java.util.concurrent.ExecutorService;
 
-public abstract class AbstractQueueListener extends BatchingQueueListener {
+public abstract class AbstractQueueListener extends QueueListener {
 
     private static final Logger logger = LoggerFactory.getLogger(AbstractQueueListener.class);
 

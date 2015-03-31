@@ -150,6 +150,8 @@ public class EventProcessorImpl implements EventProcessor {
 
     private EventWithContext rawEventToEventWithContext(ZepRawEvent zepRawEvent) throws ZepException {
         logger.debug("processEvent: event={}", zepRawEvent);
+        // FIXME: This counter logic is incorrect if an exception occurs, and the mistake will be magnified
+        //          when processing a batch of events in a single transaction.
         counters.addToProcessedEventCount(1);
 
         if (zepRawEvent.getEvent().getStatus() == EventStatus.STATUS_DROPPED) {
