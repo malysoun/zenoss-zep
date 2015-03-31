@@ -19,10 +19,6 @@ public class EventWithContext {
         return event;
     }
 
-//    public void setEvent(Event event) {
-//        this.event = event;
-//    }
-
     public EventPreCreateContext getContext() {
         return context;
     }

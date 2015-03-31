@@ -64,6 +64,7 @@ public class RawEventQueueListener extends AbstractQueueListener
      */
     public void setBatchSize(int batchSize) {
         this.batchSize = batchSize;
+        batch = new ArrayList<org.zenoss.amqp.Message<Message>>(batchSize);
     }
 
     private boolean throttleConsumer = true;
@@ -104,7 +105,7 @@ public class RawEventQueueListener extends AbstractQueueListener
     @Override
     protected void configureChannel(Channel channel) throws AmqpException {
         logger.debug("Using prefetch count: {} for queue: {}", this.prefetchCount, getQueueIdentifier());
-        channel.setQos(0, Math.min(this.prefetchCount, this.batchSize));
+        channel.setQos(0, this.prefetchCount);
     }
 
     @Override
