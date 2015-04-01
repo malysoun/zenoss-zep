@@ -38,6 +38,7 @@ import org.zenoss.protobufs.zep.Zep.EventNote;
 import org.zenoss.protobufs.zep.Zep.EventSeverity;
 import org.zenoss.protobufs.zep.Zep.EventStatus;
 import org.zenoss.protobufs.zep.Zep.EventSummary;
+import org.zenoss.protobufs.zep.Zep.EventSummary.Builder;
 import org.zenoss.protobufs.zep.Zep.EventSummaryOrBuilder;
 import org.zenoss.protobufs.zep.Zep.EventTag;
 import org.zenoss.zep.Counters;
@@ -73,11 +74,11 @@ import java.util.Collection;
 import java.util.Collections;
 import java.util.EnumSet;
 import java.util.HashMap;
-import java.util.HashSet;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.TreeSet;
 import java.util.concurrent.Callable;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
@@ -118,6 +119,7 @@ public class EventSummaryDaoImpl implements EventSummaryDao {
 
     private Counters counters;
     private WorkQueue eventIndexQueue;
+    private Object forUpdateLock = new Object();
 
     public EventSummaryDaoImpl(DataSource dataSource) throws MetaDataAccessException {
         this.dataSource = dataSource;
@@ -186,79 +188,262 @@ public class EventSummaryDaoImpl implements EventSummaryDao {
     @Timed
     @TransactionalRollbackAllExceptions
     public String create(Event event, final EventPreCreateContext context) throws ZepException {
-        String result = doCreateEvent(event, context);
-        indexSignal(result, System.currentTimeMillis());
-        return result;
+        List<Map.Entry<String, Event>> result = batchCreate(Collections.singletonList(new EventWithContext(event, context)));
+        String uuid = null;
+        if (!result.isEmpty()) {
+            uuid = result.get(0).getKey();
+        }
+        return uuid;
     }
 
-    private String createEventWithContext(EventWithContext eventWithContext) throws ZepException {
-        return doCreateEvent(eventWithContext.getEvent(), eventWithContext.getContext());
+//    private String createEventWithContext(EventWithContext eventWithContext) throws ZepException {
+//        return doCreateEvent(eventWithContext.getEvent(), eventWithContext.getContext());
+//    }
+//
+//    private String doCreateEvent(Event event, final EventPreCreateContext context) throws ZepException {
+//
+//        /*
+//         * Clear events are dropped if they don't clear any corresponding events.
+//         */
+//        final List<String> clearedEventUuids;
+//        final boolean createClearHash;
+//        if (event.getSeverity() == EventSeverity.SEVERITY_CLEAR) {
+//            final Event finalEvent = event;
+//            try {
+//                clearedEventUuids = metricRegistry.timer(getClass().getName() + ".clearEvents").time(new Callable<List<String>>() {
+//                    @Override
+//                    public List<String> call() throws Exception {
+//                        return clearEvents(finalEvent, context);
+//                    }
+//                });
+//            } catch (ZepException e) {
+//                throw e;
+//            } catch (Exception e) {
+//                throw new ZepException(e);
+//            }
+//
+//            if (clearedEventUuids.isEmpty()) {
+//                logger.debug("Clear event didn't clear any events, dropping: {}", event);
+//                return null;
+//            }
+//            // Clear events always get created in CLOSED status
+//            if (event.getStatus() != EventStatus.STATUS_CLOSED) {
+//                event = Event.newBuilder(event).setStatus(EventStatus.STATUS_CLOSED).build();
+//            }
+//            createClearHash = false;
+//        } else {
+//            createClearHash = true;
+//            clearedEventUuids = Collections.emptyList();
+//        }
+//
+//        /*
+//         * Closed events have a unique fingerprint_hash in summary to allow multiple rows
+//         * but only allow one active event (where the de-duplication occurs).
+//         */
+//        final String fingerprint = DaoUtils.truncateStringToUtf8(event.getFingerprint(), MAX_FINGERPRINT);
+//        final byte[] fingerprintHash;
+//        final String uuid;
+//        if (ZepConstants.CLOSED_STATUSES.contains(event.getStatus())) {
+//            fingerprintHash = DaoUtils.sha1(fingerprint + '|' + System.currentTimeMillis());
+//            uuid = saveEventByFingerprint(fingerprintHash, Collections.singleton(event), context, createClearHash);
+//        } else {
+//            fingerprintHash = DaoUtils.sha1(fingerprint);
+//            final String hashAsString = new String(fingerprintHash).intern();
+//            final Event finalEvent = event;
+//            try {
+//                metricRegistry.timer(getClass().getName() + ".queueDedup").time(new Callable() {
+//                    @Override
+//                    public Object call() throws Exception {
+//                        boolean queued = false;
+//                        while (!queued) {
+//                            List<Event> events = deduping.get(hashAsString);
+//                            if (events == null) {
+//                                deduping.putIfAbsent(hashAsString, Collections.EMPTY_LIST);
+//                                continue;
+//                            }
+//                            List<Event> newEvents = Lists.newArrayList(events);
+//                            newEvents.add(finalEvent);
+//                            queued = deduping.replace(hashAsString, events, newEvents);
+//                        }
+//                        return null;
+//                    }
+//                });
+//            } catch (ZepException e) {
+//                throw e;
+//            } catch (Exception e) {
+//                throw new ZepException(e);
+//            }
+//
+//            try {
+//                uuid = metricRegistry.timer(getClass().getName() + ".dedupSync").time(new Callable<String>() {
+//                    @Override
+//                    public String call() throws Exception {
+//                        synchronized (hashAsString) {
+//                            List<Event> events = deduping.remove(hashAsString);
+//                            if (events == null)
+//                                events = Collections.EMPTY_LIST;
+//                            return saveEventByFingerprint(fingerprintHash, events, context, createClearHash);
+//                        }
+//                    }
+//                });
+//            } catch (ZepException e) {
+//                throw e;
+//            } catch (Exception e) {
+//                throw new ZepException(e);
+//            }
+//        }
+//        if (uuid == null && !clearedEventUuids.isEmpty()) {
+//            // This only happens if another thread was processing the same dup and grabbed ours,
+//            // AND in the time between that thread leaving its critical section and this thread
+//            // querying for the event_summary by fingerprint_hash, the record we're interested in
+//            // got deleted (archived).
+//            //
+//            // Anyway, probably not a big deal.
+//            logger.info("Rare race condition thwarted update of clearedByEventUuid for {} events.",
+//                    clearedEventUuids.size());
+//            return null;
+//        }
+//        try {
+//            metricRegistry.timer(getClass().getName() + ".dedupClearEvents").time(new Callable<Object>() {
+//                @Override
+//                public Object call() throws Exception {
+//                    // Mark cleared events as cleared by this event
+//                    if (!clearedEventUuids.isEmpty()) {
+//                        final EventSummaryUpdateFields updateFields = new EventSummaryUpdateFields();
+//                        updateFields.setClearedByEventUuid(uuid);
+//                        update(clearedEventUuids, EventStatus.STATUS_CLEARED, updateFields, ZepConstants.OPEN_STATUSES);
+//                        indexSignal(clearedEventUuids, System.currentTimeMillis());
+//                    }
+//                    return null;
+//                }
+//            });
+//        } catch (ZepException e) {
+//            throw e;
+//        } catch (Exception e) {
+//            throw new ZepException(e);
+//        }
+//        return uuid;
+//    }
+
+    @Timed
+    @TransactionalRollbackAllExceptions
+    @Override
+    public List<Map.Entry<String, Event>> batchCreate(List<EventWithContext> eventList) throws ZepException {
+
+        //Copy for mutating
+        List<EventWithContext> myEvents = Lists.newArrayListWithCapacity(eventList.size());
+        for (EventWithContext ectx : eventList) {
+            myEvents.add(new EventWithContext(ectx.event, ectx.getContext()));
+        }
+
+        try {
+            batchCreateEventWithContext(myEvents);
+        } catch (DuplicateKeyException e) {
+            // Catch DuplicateKeyException and retry creating the event. Otherwise, the failure
+            // will propagate to the AMQP consumer, the message will be rejected (and re-queued),
+            // leading to unnecessary load on the AMQP server re-queueing/re-delivering the event.
+            //use original list since the contents of myEvents may have been changed
+            logger.info("DuplicateKeyException - retrying event batch : {}", e);
+            batchCreateEventWithContext(eventList);
+            myEvents = eventList;
+        }
+
+        List<Map.Entry<String, Event>> results = new ArrayList<Map.Entry<String, Event>>();
+        for (EventWithContext ectx : myEvents) {
+            if (ectx.summary.getUuid() != null) {
+                Map.Entry<String, Event> result = new AbstractMap.SimpleEntry<String, Event>(ectx.summary.getUuid(), ectx.getEvent());
+                results.add(result);
+            }
+        }
+        return results;
     }
 
-    private String doCreateEvent(Event event, final EventPreCreateContext context) throws ZepException {
-
+    private void batchCreateEventWithContext(List<EventWithContext> eventList) throws ZepException {
         /*
          * Clear events are dropped if they don't clear any corresponding events.
          */
-        final List<String> clearedEventUuids;
-        final boolean createClearHash;
-        if (event.getSeverity() == EventSeverity.SEVERITY_CLEAR) {
-            final Event finalEvent = event;
-            try {
-                clearedEventUuids = metricRegistry.timer(getClass().getName() + ".clearEvents").time(new Callable<List<String>>() {
-                    @Override
-                    public List<String> call() throws Exception {
-                        return clearEvents(finalEvent, context);
-                    }
-                });
-            } catch (ZepException e) {
-                throw e;
-            } catch (Exception e) {
-                throw new ZepException(e);
-            }
-
-            if (clearedEventUuids.isEmpty()) {
-                logger.debug("Clear event didn't clear any events, dropping: {}", event);
-                return null;
-            }
-            // Clear events always get created in CLOSED status
-            if (event.getStatus() != EventStatus.STATUS_CLOSED) {
-                event = Event.newBuilder(event).setStatus(EventStatus.STATUS_CLOSED).build();
-            }
-            createClearHash = false;
-        } else {
-            createClearHash = true;
-            clearedEventUuids = Collections.emptyList();
-        }
+        batchClearEvents(eventList);
 
         /*
          * Closed events have a unique fingerprint_hash in summary to allow multiple rows
          * but only allow one active event (where the de-duplication occurs).
          */
-        final String fingerprint = DaoUtils.truncateStringToUtf8(event.getFingerprint(), MAX_FINGERPRINT);
-        final byte[] fingerprintHash;
-        final String uuid;
-        if (ZepConstants.CLOSED_STATUSES.contains(event.getStatus())) {
-            fingerprintHash = DaoUtils.sha1(fingerprint + '|' + System.currentTimeMillis());
-            uuid = saveEventByFingerprint(fingerprintHash, Collections.singleton(event), context, createClearHash);
-        } else {
-            fingerprintHash = DaoUtils.sha1(fingerprint);
-            final String hashAsString = new String(fingerprintHash).intern();
-            final Event finalEvent = event;
+
+        List<EventWithContext> closed = new ArrayList<EventWithContext>();
+        List<EventWithContext> openEvents = new ArrayList<EventWithContext>();
+        for (EventWithContext ectx : eventList) {
+            Event event = ectx.getEvent();
+            final String fingerprint = DaoUtils.truncateStringToUtf8(event.getFingerprint(), MAX_FINGERPRINT);
+            ectx.fingerprint = fingerprint;
+            if (ZepConstants.CLOSED_STATUSES.contains(event.getStatus())) {
+                ectx.fingerprintHash = DaoUtils.sha1(fingerprint + '|' + System.currentTimeMillis());
+                closed.add(ectx);
+            } else {
+                ectx.fingerprintHash = DaoUtils.sha1(fingerprint);
+                openEvents.add(ectx);
+            }
+        }
+        if (!closed.isEmpty()) {
+            batchSaveEventByFingerprint(closed, false);
+        }
+        if (!openEvents.isEmpty()) {
+            for (EventWithContext ectx : eventList) {
+
+                final String hashAsString = new String(ectx.fingerprintHash).intern();
+                final Event finalEvent = ectx.event;
+                try {
+                    metricRegistry.timer(getClass().getName() + ".queueDedup").time(new Callable() {
+                        @Override
+                        public Object call() throws Exception {
+                            boolean queued = false;
+                            while (!queued) {
+                                List<Event> events = deduping.get(hashAsString);
+                                if (events == null) {
+                                    deduping.putIfAbsent(hashAsString, Collections.EMPTY_LIST);
+                                    continue;
+                                }
+                                List<Event> newEvents = Lists.newArrayList(events);
+                                newEvents.add(finalEvent);
+                                queued = deduping.replace(hashAsString, events, newEvents);
+                            }
+                            return null;
+                        }
+                    });
+                } catch (ZepException e) {
+                    throw e;
+                } catch (Exception e) {
+                    throw new ZepException(e);
+                }
+            }
+            batchSaveEventByFingerprint(openEvents, true);
+        }
+
+
+        TreeSet<String> uuids = new TreeSet<String>();
+        for (EventWithContext ectx : eventList) {
+            final String uuid = ectx.summary.getUuid();
+            final List<String> clearedEventUuids = ectx.clearUUIDs;
+            uuids.addAll(ectx.clearUUIDs);
+            if (uuid == null && !clearedEventUuids.isEmpty()) {
+                // This only happens if another thread was processing the same dup and grabbed ours,
+                // AND in the time between that thread leaving its critical section and this thread
+                // querying for the event_summary by fingerprint_hash, the record we're interested in
+                // got deleted (archived).
+                //
+                // Anyway, probably not a big deal.
+                logger.info("Rare race condition thwarted update of clearedByEventUuid for {} events.",
+                        clearedEventUuids.size());
+                continue;
+            }
             try {
-                metricRegistry.timer(getClass().getName() + ".queueDedup").time(new Callable() {
+                metricRegistry.timer(getClass().getName() + ".dedupClearEvents").time(new Callable<Object>() {
                     @Override
                     public Object call() throws Exception {
-                        boolean queued = false;
-                        while (!queued) {
-                            List<Event> events = deduping.get(hashAsString);
-                            if (events == null) {
-                                deduping.putIfAbsent(hashAsString, Collections.EMPTY_LIST);
-                                continue;
-                            }
-                            List<Event> newEvents = Lists.newArrayList(events);
-                            newEvents.add(finalEvent);
-                            queued = deduping.replace(hashAsString, events, newEvents);
+                        // Mark cleared events as cleared by this event
+                        if (!clearedEventUuids.isEmpty()) {
+                            final EventSummaryUpdateFields updateFields = new EventSummaryUpdateFields();
+                            updateFields.setClearedByEventUuid(uuid);
+                            update(clearedEventUuids, EventStatus.STATUS_CLEARED, updateFields, ZepConstants.OPEN_STATUSES, false);
                         }
                         return null;
                     }
@@ -268,85 +453,11 @@ public class EventSummaryDaoImpl implements EventSummaryDao {
             } catch (Exception e) {
                 throw new ZepException(e);
             }
-
-            try {
-                uuid = metricRegistry.timer(getClass().getName() + ".dedupSync").time(new Callable<String>() {
-                    @Override
-                    public String call() throws Exception {
-                        synchronized (hashAsString) {
-                            List<Event> events = deduping.remove(hashAsString);
-                            if (events == null)
-                                events = Collections.EMPTY_LIST;
-                            return saveEventByFingerprint(fingerprintHash, events, context, createClearHash);
-                        }
-                    }
-                });
-            } catch (ZepException e) {
-                throw e;
-            } catch (Exception e) {
-                throw new ZepException(e);
-            }
-        }
-        if (uuid == null && !clearedEventUuids.isEmpty()) {
-            // This only happens if another thread was processing the same dup and grabbed ours,
-            // AND in the time between that thread leaving its critical section and this thread
-            // querying for the event_summary by fingerprint_hash, the record we're interested in
-            // got deleted (archived).
-            //
-            // Anyway, probably not a big deal.
-            logger.info("Rare race condition thwarted update of clearedByEventUuid for {} events.",
-                    clearedEventUuids.size());
-            return null;
-        }
-        try {
-            metricRegistry.timer(getClass().getName() + ".dedupClearEvents").time(new Callable<Object>() {
-                @Override
-                public Object call() throws Exception {
-                    // Mark cleared events as cleared by this event
-                    if (!clearedEventUuids.isEmpty()) {
-                        final EventSummaryUpdateFields updateFields = new EventSummaryUpdateFields();
-                        updateFields.setClearedByEventUuid(uuid);
-                        update(clearedEventUuids, EventStatus.STATUS_CLEARED, updateFields, ZepConstants.OPEN_STATUSES);
-                    }
-                    return null;
-                }
-            });
-        } catch (ZepException e) {
-            throw e;
-        } catch (Exception e) {
-            throw new ZepException(e);
-        }
-        return uuid;
-    }
-
-    @Timed
-    @TransactionalRollbackAllExceptions
-    @Override
-    public List<Map.Entry<String, Event>> batchCreate(List<EventWithContext> eventList) throws ZepException {
-        List<Map.Entry<String, Event>> results = new ArrayList<Map.Entry<String, Event>>();
-        Set<String> uuids = new HashSet<String>();
-        for (EventWithContext eventWithContext : eventList) {
-            String uuid;
-            try {
-                uuid = createEventWithContext(eventWithContext);
-            } catch (DuplicateKeyException e) {
-                // Catch DuplicateKeyException and retry creating the event. Otherwise, the failure
-                // will propagate to the AMQP consumer, the message will be rejected (and re-queued),
-                // leading to unnecessary load on the AMQP server re-queueing/re-delivering the event.
-                if (logger.isDebugEnabled()) {
-                    logger.info("DuplicateKeyException - retrying event: {}", eventWithContext.getEvent());
-                } else {
-                    logger.info("DuplicateKeyException - retrying event: {}", eventWithContext.getEvent().getUuid());
-                }
-                uuid = createEventWithContext(eventWithContext);
-            }
             uuids.add(uuid);
-            Map.Entry<String, Event> result = new AbstractMap.SimpleEntry<String, Event>(uuid, eventWithContext.getEvent());
-            results.add(result);
         }
 
         indexSignal(uuids, System.currentTimeMillis());
-        return results;
+        return;
     }
 
     private Map<String, Object> getInsertFields(EventSummaryOrBuilder summary, EventPreCreateContext context,
@@ -374,69 +485,98 @@ public class EventSummaryDaoImpl implements EventSummaryDao {
         return fields;
     }
 
-    private String saveEventByFingerprint(final byte[] fingerprintHash, final Collection<Event> events,
-                                          final EventPreCreateContext context, final boolean createClearHash)
-            throws ZepException {
+    private void batchSaveEventByFingerprint(final List<EventWithContext> events, final boolean getDedup) throws ZepException {
         try {
-            return metricRegistry.timer(getClass().getName() + ".saveEventByFingerprint").time(new Callable<String>() {
-                @Override
-                public String call() throws Exception {
-                    final List<EventSummary.Builder> oldSummaryList = template.getJdbcOperations().query(
-                            "SELECT event_count,first_seen,last_seen,details_json,status_id,status_change,uuid" +
-                                    " FROM event_summary WHERE fingerprint_hash=? FOR UPDATE",
-                            new RowMapperResultSetExtractor<EventSummary.Builder>(eventDedupMapper, 1),
-                            fingerprintHash);
-                    final EventSummary.Builder summary;
-                    if (!oldSummaryList.isEmpty()) {
-                        summary = oldSummaryList.get(0);
-                    } else {
-                        summary = EventSummary.newBuilder();
-                        summary.setCount(0);
-                        summary.addOccurrenceBuilder(0);
-                    }
+            metricRegistry.timer(getClass().getName() + ".saveEventByFingerprint").time(
+                    new Callable<Void>() {
+                        @Override
+                        public Void call() throws Exception {
+                            //lock table for updates
 
-                    boolean isNewer = false;
-                    for (Event event : events) {
-                        isNewer = merge(summary, event) || isNewer;
-                    }
+                            synchronized (forUpdateLock) {
+                                for (EventWithContext ectx : events) {
+                                    byte[] fingerprintHash = ectx.fingerprintHash;
+                                    final List<EventSummary.Builder> oldSummaryList = template.getJdbcOperations().query(
+                                            "SELECT event_count,first_seen,last_seen,details_json,status_id,status_change,uuid" +
+                                                    " FROM event_summary WHERE fingerprint_hash=? FOR UPDATE",
+                                            new RowMapperResultSetExtractor<EventSummary.Builder>(eventDedupMapper, 1),
+                                            fingerprintHash);
+                                    final EventSummary.Builder summary;
+                                    ectx.oldSummaryList = oldSummaryList;
+                                    if (!oldSummaryList.isEmpty()) {
+                                        summary = oldSummaryList.get(0);
+                                    } else {
+                                        summary = EventSummary.newBuilder();
+                                        summary.setCount(0);
+                                        summary.addOccurrenceBuilder(0);
+                                    }
 
-                    if (!events.isEmpty()) {
-                        summary.setUpdateTime(System.currentTimeMillis());
-                        final long dedupCount;
-                        if (!oldSummaryList.isEmpty()) {
-                            dedupCount = events.size();
-                            final Map<String, Object> fields = getUpdateFields(summary, isNewer, context, createClearHash);
-                            final StringBuilder updateSql = new StringBuilder("UPDATE event_summary SET ");
-                            int i = 0;
-                            for (String fieldName : fields.keySet()) {
-                                if (++i > 1) updateSql.append(',');
-                                updateSql.append(fieldName).append("=:").append(fieldName);
-                            }
-                            updateSql.append(" WHERE fingerprint_hash=:fingerprint_hash");
-                            fields.put("fingerprint_hash", fingerprintHash);
-                            template.update(updateSql.toString(), fields);
-                            final String indexSql = "SELECT uuid " +
-                                    " FROM event_summary WHERE fingerprint_hash=:fingerprint_hash";
-                            indexResults(indexSql, fields, System.currentTimeMillis());
-                        } else {
-                            dedupCount = events.size() - 1;
-                            summary.setUuid(uuidGenerator.generate().toString());
-                            final Map<String, Object> fields = getInsertFields(summary, context, createClearHash);
-                            fields.put(COLUMN_FINGERPRINT_HASH, fingerprintHash);
-                            insert.execute(fields);
-                        }
-                        if (dedupCount > 0) {
-                            TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronizationAdapter() {
-                                @Override
-                                public void afterCommit() {
-                                    counters.addToDedupedEventCount(dedupCount);
+                                    ectx.summary = summary;
+                                    if (getDedup) {
+                                        final String hashAsString = new String(ectx.fingerprintHash).intern();
+                                        List<Event> events = deduping.remove(hashAsString);
+                                        if (events == null) {
+                                            events = Collections.EMPTY_LIST;
+                                        }
+                                        ectx.dedupingEvents = events;
+                                    }
                                 }
-                            });
+                            }
+
+                            for (EventWithContext ectx : events) {
+                                if (getDedup && ectx.dedupingEvents.isEmpty()) {
+                                    continue;
+                                }
+
+                                Builder summary = ectx.summary;
+                                List<Builder> oldSummaryList = ectx.oldSummaryList;
+                                EventPreCreateContext context = ectx.getContext();
+                                boolean createClearHash = ectx.createClearHash;
+                                byte[] fingerprintHash = ectx.fingerprintHash;
+
+                                boolean isNewer = false;
+                                if (getDedup) {
+                                    for (Event event : ectx.dedupingEvents) {
+                                        isNewer = merge(summary, event) || isNewer;
+                                    }
+                                } else {
+                                    isNewer = merge(ectx.summary, ectx.event) || isNewer;
+                                }
+                                summary.setUpdateTime(System.currentTimeMillis());
+//                                    final long dedupCount;
+                                if (!oldSummaryList.isEmpty()) {
+//                                        dedupCount = events.size();
+                                    final Map<String, Object> fields = getUpdateFields(summary, isNewer, context, createClearHash);
+                                    final StringBuilder updateSql = new StringBuilder("UPDATE event_summary SET ");
+                                    int i = 0;
+                                    for (String fieldName : fields.keySet()) {
+                                        if (++i > 1) updateSql.append(',');
+                                        updateSql.append(fieldName).append("=:").append(fieldName);
+                                    }
+                                    updateSql.append(" WHERE fingerprint_hash=:fingerprint_hash");
+                                    fields.put("fingerprint_hash", fingerprintHash);
+                                    template.update(updateSql.toString(), fields);
+                                } else {
+//                                        dedupCount = events.size() - 1;
+                                    summary.setUuid(uuidGenerator.generate().toString());
+                                    final Map<String, Object> fields = getInsertFields(summary, context, createClearHash);
+                                    fields.put(COLUMN_FINGERPRINT_HASH, fingerprintHash);
+                                    insert.execute(fields);
+                                }
+
+//                                    if (dedupCount > 0) {
+//                                        TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronizationAdapter() {
+//                                            @Override
+//                                            public void afterCommit() {
+//                                                counters.addToDedupedEventCount(dedupCount);
+//                                            }
+//                                        });
+//                                    }
+                            }
+                            return null;
                         }
                     }
-                    return summary.getUuid();
-                }
-            });
+            );
         } catch (ZepException e) {
             throw e;
         } catch (Exception e) {
@@ -589,6 +729,89 @@ public class EventSummaryDaoImpl implements EventSummaryDao {
         return fields;
     }
 
+
+    /**
+     * @param events
+     * @return all UUIDs that will be cleared
+     * @throws ZepException
+     */
+    private void batchClearEvents(List<EventWithContext> events)
+            throws ZepException {
+        ArrayList<EventWithContext> clearEvents = new ArrayList<EventWithContext>();
+        for (EventWithContext ectx : events) {
+            if (ectx.getEvent().getSeverity() == EventSeverity.SEVERITY_CLEAR) {
+                clearEvents.add(ectx);
+            } else {
+                ectx.createClearHash = true;
+            }
+
+        }
+        try {
+            batchClearEvents2(clearEvents);
+        } catch (ZepException e) {
+            throw e;
+        } catch (Exception e) {
+            throw new ZepException(e);
+        }
+        //drop any events that didn't clear another
+        for (EventWithContext ectx : clearEvents) {
+            if (ectx.clearUUIDs.isEmpty()) {
+                logger.debug("Clear event didn't clear any events, dropping: {}", ectx.getEvent());
+                ectx.dropped = true;
+            } else {
+                Event event = ectx.getEvent();
+                if (event.getStatus() != EventStatus.STATUS_CLOSED) {
+                    event = Event.newBuilder(event).setStatus(EventStatus.STATUS_CLOSED).build();
+                    ectx.event = event;
+                }
+                ectx.createClearHash = false;
+            }
+        }
+    }
+
+    private void batchClearEvents2(List<EventWithContext> events)
+            throws ZepException {
+        synchronized (forUpdateLock) {
+            for (EventWithContext ectx : events) {
+                Event event = ectx.getEvent();
+                EventPreCreateContext context = ectx.getContext();
+                TypeConverter<Long> timestampConverter = databaseCompatibility.getTimestampConverter();
+                final List<byte[]> clearHashes = EventDaoUtils.createClearHashes(event, context);
+                if (clearHashes.isEmpty()) {
+                    logger.debug("Clear event didn't contain any clear hashes: {}, {}", event, context);
+                    ectx.dropped = true;
+                    continue;
+                }
+                final long lastSeen = event.getCreatedTime();
+
+                Map<String, Object> fields = new HashMap<String, Object>(2);
+                fields.put("_clear_created_time", timestampConverter.toDatabaseType(lastSeen));
+                fields.put("_clear_hashes", clearHashes);
+
+                /* Find events that this clear event would clear. */
+                final String sql = "SELECT uuid FROM event_summary " +
+                        "WHERE last_seen <= :_clear_created_time " +
+                        "AND clear_fingerprint_hash IN (:_clear_hashes) " +
+                        "AND closed_status = FALSE " +
+                        "FOR UPDATE";
+
+                final List<String> results = this.template.query(sql, new RowMapper<String>() {
+                    @Override
+                    public String mapRow(ResultSet rs, int rowNum) throws SQLException {
+                        return uuidConverter.fromDatabaseType(rs, COLUMN_UUID);
+                    }
+                }, fields);
+                TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronizationAdapter() {
+                    @Override
+                    public void afterCommit() {
+                        counters.addToClearedEventCount(results.size());
+                    }
+                });
+                ectx.clearUUIDs = results;
+            }
+        }
+    }
+
     private List<String> clearEvents(Event event, EventPreCreateContext context)
             throws ZepException {
         TypeConverter<Long> timestampConverter = databaseCompatibility.getTimestampConverter();
@@ -602,12 +825,6 @@ public class EventSummaryDaoImpl implements EventSummaryDao {
         Map<String, Object> fields = new HashMap<String, Object>(2);
         fields.put("_clear_created_time", timestampConverter.toDatabaseType(lastSeen));
         fields.put("_clear_hashes", clearHashes);
-
-        String indexSql = "SELECT uuid FROM event_summary " +
-                "WHERE last_seen <= :_clear_created_time " +
-                "AND clear_fingerprint_hash IN (:_clear_hashes) " +
-                "AND closed_status = FALSE ";
-        this.indexResults(indexSql, fields, System.currentTimeMillis());
 
         /* Find events that this clear event would clear. */
         final String sql = "SELECT uuid FROM event_summary " +
@@ -1002,10 +1219,11 @@ public class EventSummaryDaoImpl implements EventSummaryDao {
         public void setClearedByEventUuid(String clearedByEventUuid) {
             this.clearedByEventUuid = clearedByEventUuid;
         }
+
     }
 
     private int update(final List<String> uuids, final EventStatus status, final EventSummaryUpdateFields updateFields,
-                       final Collection<EventStatus> currentStatuses) throws ZepException {
+                       final Collection<EventStatus> currentStatuses, boolean sendIndexSignal) throws ZepException {
         if (uuids.isEmpty()) {
             return 0;
         }
@@ -1061,9 +1279,9 @@ public class EventSummaryDaoImpl implements EventSummaryDao {
         }
         String selectSql = sb.toString() + sbw.toString() + " FOR UPDATE";
 
-        final String indexSql = "SELECT uuid FROM event_summary " + sbw.toString();
-        this.indexResults(indexSql, fields, System.currentTimeMillis());
-
+        if (sendIndexSignal) {
+            this.indexSignal(uuids, System.currentTimeMillis());
+        }
         /*
          * If this is a significant status change, also add an audit note
          */
@@ -1162,7 +1380,7 @@ public class EventSummaryDaoImpl implements EventSummaryDao {
         EventSummaryUpdateFields userfields = new EventSummaryUpdateFields();
         userfields.setCurrentUserName(userName);
         userfields.setCurrentUserUuid(userUuid);
-        return update(uuids, EventStatus.STATUS_ACKNOWLEDGED, userfields, currentStatuses);
+        return update(uuids, EventStatus.STATUS_ACKNOWLEDGED, userfields, currentStatuses, true);
     }
 
     private Map<String, Object> createSharedFields(long duration, TimeUnit unit) {
@@ -1211,7 +1429,7 @@ public class EventSummaryDaoImpl implements EventSummaryDao {
         EventSummaryUpdateFields userfields = new EventSummaryUpdateFields();
         userfields.setCurrentUserName(userName);
         userfields.setCurrentUserUuid(userUuid);
-        return update(uuids, EventStatus.STATUS_CLOSED, userfields, currentStatuses);
+        return update(uuids, EventStatus.STATUS_CLOSED, userfields, currentStatuses, true);
     }
 
     @Override
@@ -1224,7 +1442,7 @@ public class EventSummaryDaoImpl implements EventSummaryDao {
         EventSummaryUpdateFields userfields = new EventSummaryUpdateFields();
         userfields.setCurrentUserName(userName);
         userfields.setCurrentUserUuid(userUuid);
-        return update(uuids, EventStatus.STATUS_NEW, userfields, currentStatuses);
+        return update(uuids, EventStatus.STATUS_NEW, userfields, currentStatuses, true);
     }
 
     @Override
@@ -1233,7 +1451,7 @@ public class EventSummaryDaoImpl implements EventSummaryDao {
     public int suppress(List<String> uuids) throws ZepException {
         /* NEW -> SUPPRESSED */
         List<EventStatus> currentStatuses = Arrays.asList(EventStatus.STATUS_NEW);
-        return update(uuids, EventStatus.STATUS_SUPPRESSED, EventSummaryUpdateFields.EMPTY_FIELDS, currentStatuses);
+        return update(uuids, EventStatus.STATUS_SUPPRESSED, EventSummaryUpdateFields.EMPTY_FIELDS, currentStatuses, true);
     }
 
     @Override
@@ -1362,4 +1580,6 @@ public class EventSummaryDaoImpl implements EventSummaryDao {
         }
         eventIndexQueue.addAll(tasks);
     }
+
+
 }
