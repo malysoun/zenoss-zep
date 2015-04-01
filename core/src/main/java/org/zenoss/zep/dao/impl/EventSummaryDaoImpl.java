@@ -66,12 +66,14 @@ import java.io.IOException;
 import java.lang.reflect.Proxy;
 import java.sql.ResultSet;
 import java.sql.SQLException;
+import java.util.AbstractMap;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.EnumSet;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
@@ -176,14 +178,24 @@ public class EventSummaryDaoImpl implements EventSummaryDao {
     }
 
     @Override
-    public void setTxSynchronizedQueue(boolean val){
-	txSynchronizedQueue = val;
+    public void setTxSynchronizedQueue(boolean val) {
+        txSynchronizedQueue = val;
     }
 
     @Override
     @Timed
     @TransactionalRollbackAllExceptions
     public String create(Event event, final EventPreCreateContext context) throws ZepException {
+        String result = doCreateEvent(event, context);
+        indexSignal(result, System.currentTimeMillis());
+        return result;
+    }
+
+    private String createEventWithContext(EventWithContext eventWithContext) throws ZepException {
+        return doCreateEvent(eventWithContext.getEvent(), eventWithContext.getContext());
+    }
+
+    private String doCreateEvent(Event event, final EventPreCreateContext context) throws ZepException {
 
         /*
          * Clear events are dropped if they don't clear any corresponding events.
@@ -312,11 +324,11 @@ public class EventSummaryDaoImpl implements EventSummaryDao {
     @Override
     public List<Map.Entry<String, Event>> batchCreate(List<EventWithContext> eventList) throws ZepException {
         List<Map.Entry<String, Event>> results = new ArrayList<Map.Entry<String, Event>>();
-
+        Set<String> uuids = new HashSet<String>();
         for (EventWithContext eventWithContext : eventList) {
             String uuid;
             try {
-                uuid = createEvent(eventWithContext);
+                uuid = createEventWithContext(eventWithContext);
             } catch (DuplicateKeyException e) {
                 // Catch DuplicateKeyException and retry creating the event. Otherwise, the failure
                 // will propagate to the AMQP consumer, the message will be rejected (and re-queued),
@@ -326,18 +338,20 @@ public class EventSummaryDaoImpl implements EventSummaryDao {
                 } else {
                     logger.info("DuplicateKeyException - retrying event: {}", eventWithContext.getEvent().getUuid());
                 }
-                uuid = createEvent(eventWithContext);
+                uuid = createEventWithContext(eventWithContext);
             }
+            uuids.add(uuid);
             Map.Entry<String, Event> result = new AbstractMap.SimpleEntry<String, Event>(uuid, eventWithContext.getEvent());
             results.add(result);
         }
+
+        indexSignal(uuids, System.currentTimeMillis());
         return results;
     }
 
-    private Map<String,Object> getInsertFields(EventSummaryOrBuilder summary, EventPreCreateContext context,
-                                               boolean createClearHash)
-            throws ZepException
-    {
+    private Map<String, Object> getInsertFields(EventSummaryOrBuilder summary, EventPreCreateContext context,
+                                                boolean createClearHash)
+            throws ZepException {
         TypeConverter<Long> timestampConverter = databaseCompatibility.getTimestampConverter();
         Event event = summary.getOccurrence(0);
         final Map<String, Object> fields = eventDaoHelper.createOccurrenceFields(event);
@@ -410,7 +424,6 @@ public class EventSummaryDaoImpl implements EventSummaryDao {
                             final Map<String, Object> fields = getInsertFields(summary, context, createClearHash);
                             fields.put(COLUMN_FINGERPRINT_HASH, fingerprintHash);
                             insert.execute(fields);
-                            indexSignal(summary.getUuid(), System.currentTimeMillis());
                         }
                         if (dedupCount > 0) {
                             TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronizationAdapter() {
@@ -1324,7 +1337,7 @@ public class EventSummaryDaoImpl implements EventSummaryDao {
         this.indexSignal(Collections.singletonList(eventUuid), updateTime);
     }
 
-    private void indexSignal(final List<String> eventUuids, final long updateTime) {
+    private void indexSignal(final Collection<String> eventUuids, final long updateTime) {
         if (!txSynchronizedQueue) {
             doIndexSignal(eventUuids, updateTime);
             return;
@@ -1338,7 +1351,7 @@ public class EventSummaryDaoImpl implements EventSummaryDao {
         });
     }
 
-    private void doIndexSignal(final List<String> eventUuids, final long updateTime) {
+    private void doIndexSignal(final Collection<String> eventUuids, final long updateTime) {
         if (eventUuids.isEmpty()) {
             return;
         }

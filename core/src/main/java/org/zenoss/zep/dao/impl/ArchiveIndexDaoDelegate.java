@@ -31,7 +31,7 @@ public class ArchiveIndexDaoDelegate implements IndexDaoDelegate {
     private final EventSummaryRowMapper rowMapper;
     private final TypeConverter<String> uuidConverter;
     private final TypeConverter<Long> timestampConverter;
-
+    private volatile long lastIndexTime;
 
     public ArchiveIndexDaoDelegate(DataSource ds, EventDaoHelper daoHelper,
                                    DatabaseCompatibility databaseCompatibility) {
@@ -42,6 +42,11 @@ public class ArchiveIndexDaoDelegate implements IndexDaoDelegate {
         this.uuidConverter = databaseCompatibility.getUUIDConverter();
         this.timestampConverter = databaseCompatibility.getTimestampConverter();
         this.rowMapper = new EventSummaryRowMapper(daoHelper, databaseCompatibility);
+    }
+
+    @Override
+    public long getLastIndexTime() {
+        return lastIndexTime;
     }
 
     @Override
@@ -137,6 +142,10 @@ public class ArchiveIndexDaoDelegate implements IndexDaoDelegate {
                 public Long mapRow(ResultSet rs, int rowNum) throws SQLException {
                     final long iqId = rs.getLong("iq_id");
                     final String iqUuid = uuidConverter.fromDatabaseType(rs, "iq_uuid");
+                    final long iqTime = rs.getLong("iq_update_time");
+                    if (iqTime > lastIndexTime) {
+                        lastIndexTime = iqTime;
+                    }
                     // Don't process the same event multiple times.
                     if (eventUuids.add(iqUuid)) {
                         final Object uuid = rs.getObject("uuid");

@@ -81,7 +81,6 @@ public class EventIndexQueueDaoImpl implements EventIndexQueueDao, ApplicationEv
         Set<String> deleted = pollEvents.getDeleted();
         //TODO GET lastIndexTime from pollEvents
         List<IndexQueueID> eventsIDs = pollEvents.getIndexQueueIds();
-
         if (!indexed.isEmpty()) {
             try {
                 handler.prepareToHandle(indexed);
@@ -118,6 +117,7 @@ public class EventIndexQueueDaoImpl implements EventIndexQueueDao, ApplicationEv
         );
 
         this.indexedCounter.inc(eventsIDs.size());
+        this.lastIndexTime = indexDaoDelegate.getLastIndexTime();
         return eventsIDs;
     }
 

@@ -21,11 +21,18 @@ public class SummaryIndexDaoDelegate implements IndexDaoDelegate {
     final private String queueName = EventConstants.TABLE_EVENT_SUMMARY_INDEX;
     final private WorkQueue redisWorkQueue;
     final private EventSummaryDao eventSummaryDao;
+    private volatile long lastIndexTime;
+
 
 
     public SummaryIndexDaoDelegate(WorkQueue redisWorkQueue, EventSummaryDao eventSummaryDao) {
         this.redisWorkQueue = redisWorkQueue;
         this.eventSummaryDao = eventSummaryDao;
+    }
+
+    @Override
+    public long getLastIndexTime() {
+        return lastIndexTime;
     }
 
     @Override
@@ -108,6 +115,9 @@ public class SummaryIndexDaoDelegate implements IndexDaoDelegate {
                     if (et.lastSeen > maxUpdateTime) {
                         break;
                     } else {
+                        if (et.lastSeen > lastIndexTime) {
+                            lastIndexTime = et.lastSeen;
+                        }
                         filteredEventIds.add(et);
                     }
                 }

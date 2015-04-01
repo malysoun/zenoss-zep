@@ -10,6 +10,8 @@ import java.util.List;
  * Created by jplouis on 3/25/15.
  */
 public interface IndexDaoDelegate {
+    long getLastIndexTime();
+
     PollEvents pollEvents(int limit, long maxUpdateTime);
 
     long getQueueLength();
