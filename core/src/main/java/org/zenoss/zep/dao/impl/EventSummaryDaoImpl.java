@@ -119,6 +119,7 @@ public class EventSummaryDaoImpl implements EventSummaryDao {
 
     private Counters counters;
     private WorkQueue eventIndexQueue;
+    private Object createSingleLock = new Object();
     private Object forUpdateLock = new Object();
 
     public EventSummaryDaoImpl(DataSource dataSource) throws MetaDataAccessException {
@@ -188,10 +189,14 @@ public class EventSummaryDaoImpl implements EventSummaryDao {
     @Timed
     @TransactionalRollbackAllExceptions
     public String create(Event event, final EventPreCreateContext context) throws ZepException {
-        List<Map.Entry<String, Event>> result = batchCreate(Collections.singletonList(new EventWithContext(event, context)));
         String uuid = null;
-        if (!result.isEmpty()) {
-            uuid = result.get(0).getKey();
+
+        // without this lock, concurrent create() calls for new duplicate events may return null
+        synchronized(createSingleLock) {
+            List<Map.Entry<String, Event>> result = batchCreate(Collections.singletonList(new EventWithContext(event, context)));
+            if (!result.isEmpty()) {
+                uuid = result.get(0).getKey();
+            }
         }
         return uuid;
     }
@@ -351,10 +356,15 @@ public class EventSummaryDaoImpl implements EventSummaryDao {
         List<Map.Entry<String, Event>> results = new ArrayList<Map.Entry<String, Event>>();
         for (EventWithContext ectx : myEvents) {
 
-            if (ectx.summary.getUuid() != null) {
-                Map.Entry<String, Event> result = new AbstractMap.SimpleEntry<String, Event>(ectx.summary.getUuid(), ectx.getEvent());
-                results.add(result);
+            // When different threads attempt to create multiple instances of the same event,
+            //      the deduping logic may skip creation of the event on some threads. When that happens,
+            //      the summary event is not initialized.
+            if (ectx.summary == null) {
+                logger.info("WARNING: batchCreate skipped event {}", ectx.getEvent());
+                continue;
             }
+            Map.Entry<String, Event> result = new AbstractMap.SimpleEntry<String, Event>(ectx.summary.getUuid(), ectx.getEvent());
+            results.add(result);
         }
 	logger.info("batch create results {}", results );
 
@@ -424,20 +434,23 @@ public class EventSummaryDaoImpl implements EventSummaryDao {
 
         TreeSet<String> uuids = new TreeSet<String>();
         for (EventWithContext ectx : eventList) {
-            final String uuid = ectx.summary.getUuid();
+            final String uuid = ectx.summary == null ? null : ectx.summary.getUuid();
             final List<String> clearedEventUuids = ectx.clearUUIDs;
             uuids.addAll(ectx.clearUUIDs);
-            if (uuid == null && !clearedEventUuids.isEmpty()) {
-                // This only happens if another thread was processing the same dup and grabbed ours,
-                // AND in the time between that thread leaving its critical section and this thread
-                // querying for the event_summary by fingerprint_hash, the record we're interested in
-                // got deleted (archived).
-                //
-                // Anyway, probably not a big deal.
-                logger.info("Rare race condition thwarted update of clearedByEventUuid for {} events.",
-                        clearedEventUuids.size());
+            if (uuid == null) {
+                if (!clearedEventUuids.isEmpty()) {
+                    // This only happens if another thread was processing the same dup and grabbed ours,
+                    // AND in the time between that thread leaving its critical section and this thread
+                    // querying for the event_summary by fingerprint_hash, the record we're interested in
+                    // got deleted (archived).
+                    //
+                    // Anyway, probably not a big deal.
+                    logger.info("Rare race condition thwarted update of clearedByEventUuid for {} events.",
+                            clearedEventUuids.size());
+                }
                 continue;
             }
+
             try {
                 metricRegistry.timer(getClass().getName() + ".dedupClearEvents").time(new Callable<Object>() {
                     @Override
@@ -496,17 +509,17 @@ public class EventSummaryDaoImpl implements EventSummaryDao {
                         public Void call() throws Exception {
                             //lock table for updates
 
-			    logger.info("waiting for update lock");
+			    logger.info("waiting for update lock, batchsize={} getDeDeup={}", events.size(), getDedup);
                             synchronized (forUpdateLock) {
                                 for (EventWithContext ectx : events) {
                                     byte[] fingerprintHash = ectx.fingerprintHash;
-				    logger.info("getting lock");
+				    logger.info("getting row lock(s) for {}", new String(ectx.fingerprintHash));
                                     final List<EventSummary.Builder> oldSummaryList = template.getJdbcOperations().query(
                                             "SELECT event_count,first_seen,last_seen,details_json,status_id,status_change,uuid" +
                                                     " FROM event_summary WHERE fingerprint_hash=? FOR UPDATE",
                                             new RowMapperResultSetExtractor<EventSummary.Builder>(eventDedupMapper, 1),
                                             fingerprintHash);
-				    logger.info("GOT lock");
+				    logger.info("GOT row lock(s)");
                                     final EventSummary.Builder summary;
                                     ectx.oldSummaryList = oldSummaryList;
                                     if (!oldSummaryList.isEmpty()) {
@@ -524,16 +537,19 @@ public class EventSummaryDaoImpl implements EventSummaryDao {
                                         if (events == null) {
                                             events = Collections.EMPTY_LIST;
                                         }
-	
-                                        logger.info("deduping events got list {}", events);
+
+                                        logger.info("deduping events got list of {} events: {}", events.size(), events);
 
                                         ectx.dedupingEvents = events;
                                     }
                                 }
-                            }
+                            } // end synchronized(forUpdateLock)
 
                             for (EventWithContext ectx : events) {
                                 if (getDedup && ectx.dedupingEvents.isEmpty()) {
+                                    // some other thread is creating a new summary instance of this event
+                                    //      so make it clear that this instance has no summary
+                                    ectx.summary = null;
                                     continue;
                                 }
 
@@ -582,16 +598,18 @@ public class EventSummaryDaoImpl implements EventSummaryDao {
 //                                        });
 //                                    }
                             }
+
                             return null;
                         }
                     }
             );
         } catch (ZepException e) {
             throw e;
-	} catch (DuplicateKeyException e){
-	    throw e;
+        } catch (DuplicateKeyException e){
+            logger.info("caught DuplicateKeyException");
+            throw e;
         } catch (Exception e) {
-	    logger.info("caught exception {}", e.getMessage());
+            logger.info("caught exception {}", e.getMessage());
             throw new ZepException(e);
         }
     }

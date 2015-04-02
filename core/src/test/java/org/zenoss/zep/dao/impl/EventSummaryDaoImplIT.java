@@ -1,10 +1,10 @@
 /*****************************************************************************
- * 
+ *
  * Copyright (C) Zenoss, Inc. 2010-2011, 2014 all rights reserved.
- * 
+ *
  * This content is made available according to terms specified in
  * License.zenoss under the directory where your Zenoss product is installed.
- * 
+ *
  ****************************************************************************/
 
 
@@ -117,7 +117,7 @@ public class EventSummaryDaoImplIT extends AbstractTransactionalJUnit4SpringCont
         assertEquals(expected, actual);
     }
 
-    //@Test
+    @Test
     public void testSummaryInsert() throws ZepException, InterruptedException {
         Event event = EventTestUtils.createSampleEvent();
         EventSummary eventSummaryFromDb = createSummaryNew(event);
@@ -188,11 +188,13 @@ public class EventSummaryDaoImplIT extends AbstractTransactionalJUnit4SpringCont
                 @Override
                 public String call() throws Exception {
                     barrier.await();
-		    try{
-			return eventSummaryDao.create(event, context);
-		    }catch (DuplicateKeyException e){
-			return eventSummaryDao.create(event, context);
-		    }
+                    // simulate EventProcessorImpl.processEvent() to handle expected exceptions associated
+                    //      with adding/updating duplicate events concurrently
+                    try {
+                        return eventSummaryDao.create(event, context);
+                    } catch (DuplicateKeyException e){
+                        return eventSummaryDao.create(event, context);
+                    }
                 }
             });
         }
@@ -201,6 +203,7 @@ public class EventSummaryDaoImplIT extends AbstractTransactionalJUnit4SpringCont
             String thisUuid = ecs.take().get();
             if (uuid == null) {
                 assertNotNull(thisUuid);
+                assertFalse(thisUuid.isEmpty());
                 uuid = thisUuid;
             }
             else {
@@ -211,7 +214,7 @@ public class EventSummaryDaoImplIT extends AbstractTransactionalJUnit4SpringCont
         assertEquals(poolSize, this.eventSummaryDao.findByUuid(uuid).getCount());
     }
 
-    //@Test
+    @Test
     public void testAcknowledgedToNew() throws ZepException {
         /*
          * Verify acknowledged events aren't changed to new with a new
@@ -233,7 +236,7 @@ public class EventSummaryDaoImplIT extends AbstractTransactionalJUnit4SpringCont
                 newEventSummaryFromDb.getStatusChangeTime());
     }
 
-    //@Test
+    @Test
     public void testAcknowledgedToSuppressed() throws ZepException {
         /*
          * Verify acknowledged events aren't changed to suppressed with a new
@@ -265,7 +268,7 @@ public class EventSummaryDaoImplIT extends AbstractTransactionalJUnit4SpringCont
         return new String(chars);
     }
 
-    //@Test
+    @Test
     public void testSummaryMaxInsert() throws ZepException,
             InterruptedException {
         Event.Builder eventBuilder = Event.newBuilder(createUniqueEvent());
@@ -333,7 +336,7 @@ public class EventSummaryDaoImplIT extends AbstractTransactionalJUnit4SpringCont
         return eventBuilder.build();
     }
 
-    //@Test
+    @Test
     public void testListByUuid() throws ZepException {
         Set<String> uuidsToSearch = new HashSet<String>();
         for (int i = 0; i < 10; i++) {
@@ -351,7 +354,7 @@ public class EventSummaryDaoImplIT extends AbstractTransactionalJUnit4SpringCont
         }
     }
 
-    //@Test
+    @Test
     public void testReopen() throws ZepException {
         EventSummary summary = createSummaryNew(createUniqueEvent());
         long origStatusChange = summary.getStatusChangeTime();
@@ -386,7 +389,7 @@ public class EventSummaryDaoImplIT extends AbstractTransactionalJUnit4SpringCont
         compareSummary(origSummary, summary);
     }
 
-    //@Test
+    @Test
     public void testAcknowledge() throws ZepException {
         EventSummary summary = createSummaryNew(createUniqueEvent());
         long origStatusChange = summary.getStatusChangeTime();
@@ -433,7 +436,7 @@ public class EventSummaryDaoImplIT extends AbstractTransactionalJUnit4SpringCont
         assertEquals(0, eventSummaryDao.acknowledge(Collections.singletonList(summary.getUuid()), userUuid, userName));
     }
 
-    //@Test
+    @Test
     public void testAcknowledgeNullUserNameUuid() throws ZepException {
         EventSummary summary = createSummaryNew(createUniqueEvent());
         long origStatusChange = summary.getStatusChangeTime();
@@ -455,7 +458,7 @@ public class EventSummaryDaoImplIT extends AbstractTransactionalJUnit4SpringCont
         compareSummary(origSummary, summary);
     }
 
-    //@Test
+    @Test
     public void testSuppress() throws ZepException {
         EventSummary summary = createSummaryNew(createUniqueEvent());
         long origStatusChange = summary.getStatusChangeTime();
@@ -476,7 +479,7 @@ public class EventSummaryDaoImplIT extends AbstractTransactionalJUnit4SpringCont
         compareSummary(origSummary, summary);
     }
 
-    //@Test
+    @Test
     public void testClose() throws ZepException {
         EventSummary summary = createSummaryNew(createUniqueEvent());
         long origStatusChange = summary.getStatusChangeTime();
@@ -501,7 +504,7 @@ public class EventSummaryDaoImplIT extends AbstractTransactionalJUnit4SpringCont
         compareSummary(origSummary, summary);
     }
 
-    //@Test
+    @Test
     public void testAddNote() throws ZepException {
         EventSummary summary = createSummaryNew(createUniqueEvent());
         assertEquals(0, summary.getNotesCount());
@@ -522,7 +525,7 @@ public class EventSummaryDaoImplIT extends AbstractTransactionalJUnit4SpringCont
         assertEquals("pkw", summary.getNotes(1).getUserName());
     }
 
-    //@Test
+    @Test
     public void testUpdateDetailsReplace() throws ZepException {
         Event newEvent = createUniqueEvent();
         Event.Builder builder = Event.newBuilder(newEvent).clearDetails();
@@ -556,7 +559,7 @@ public class EventSummaryDaoImplIT extends AbstractTransactionalJUnit4SpringCont
         assertEquals(Collections.singletonList("D"), resultDetailsMap.get("D"));
     }
 
-    //@Test
+    @Test
     public void testUpdateDetailsAppend() throws ZepException {
         Event newEvent = createUniqueEvent();
         Event.Builder builder = Event.newBuilder(newEvent).clearDetails();
@@ -588,7 +591,7 @@ public class EventSummaryDaoImplIT extends AbstractTransactionalJUnit4SpringCont
         assertEquals(Collections.singletonList("C"), resultDetailsMap.get("C"));
     }
 
-    //@Test
+    @Test
     public void testUpdateDetailsUnique() throws ZepException {
         Event newEvent = createUniqueEvent();
         Event.Builder builder = Event.newBuilder(newEvent).clearDetails();
@@ -629,7 +632,7 @@ public class EventSummaryDaoImplIT extends AbstractTransactionalJUnit4SpringCont
         return eventBuilder.build();
     }
 
-    //@Test
+    @Test
     public void testAgeEvents() throws ZepException {
         EventSummary warning = createSummaryNew(createOldEvent(5,
                 TimeUnit.MINUTES, EventSeverity.SEVERITY_WARNING));
@@ -679,7 +682,7 @@ public class EventSummaryDaoImplIT extends AbstractTransactionalJUnit4SpringCont
         assertEquals(EventStatus.STATUS_AGED, summaryError.getStatus());
     }
 
-    //@Test
+    @Test
     public void testArchiveEventsEmpty() throws ZepException {
         // Make sure we don't fail if there are no events to archive
         int numArchived = this.eventSummaryDao.archive(0L, TimeUnit.SECONDS,
@@ -687,7 +690,7 @@ public class EventSummaryDaoImplIT extends AbstractTransactionalJUnit4SpringCont
         assertEquals(0, numArchived);
     }
 
-    //@Test
+    @Test
     public void testClearEvents() throws ZepException {
         Event event = createUniqueEvent();
         EventSummary normalEvent = createSummaryNew(Event.newBuilder(event)
@@ -708,7 +711,7 @@ public class EventSummaryDaoImplIT extends AbstractTransactionalJUnit4SpringCont
         compareSummary(normalEvent, normalEventSummary);
     }
 
-    //@Test
+    @Test
     public void testClearEventsCustomGenerator() throws ZepException {
         Event event = Event.newBuilder(createUniqueEvent()).setSeverity(EventSeverity.SEVERITY_WARNING)
                 .setEventKey("MyKey2").build();
@@ -744,7 +747,7 @@ public class EventSummaryDaoImplIT extends AbstractTransactionalJUnit4SpringCont
         compareSummary(normalEvent, normalEventSummary);
     }
 
-    //@Test
+    @Test
     public void testMergeDuplicateDetails() throws ZepException {
         String name = "dup1";
         String val1 = "dupval";
@@ -763,7 +766,7 @@ public class EventSummaryDaoImplIT extends AbstractTransactionalJUnit4SpringCont
                 detailFromDb.getValueList());
     }
 
-    //@Test
+    @Test
     public void testFilterDuplicateTags() throws ZepException {
         Event.Builder eventBuilder = Event.newBuilder(createUniqueEvent())
                 .clearTags();
@@ -787,7 +790,7 @@ public class EventSummaryDaoImplIT extends AbstractTransactionalJUnit4SpringCont
         assertEquals(1, numFound);
     }
 
-    //@Test
+    @Test
     public void testChangeSeverity() throws ZepException {
         // Verify that severity changes when new event with same fingerprint comes in with new severity
         Event.Builder firstBuilder = Event.newBuilder(createUniqueEvent());
@@ -807,7 +810,7 @@ public class EventSummaryDaoImplIT extends AbstractTransactionalJUnit4SpringCont
         assertEquals(EventSeverity.SEVERITY_INFO, secondSummary.getOccurrence(0).getSeverity());
     }
 
-    //@Test
+    @Test
     public void testReidentifyDevice() throws ZepException {
         Event.Builder builder = Event.newBuilder(createUniqueEvent());
         EventActor.Builder actorBuilder = EventActor.newBuilder(builder.getActor());
@@ -829,7 +832,7 @@ public class EventSummaryDaoImplIT extends AbstractTransactionalJUnit4SpringCont
         assertEquals(elementUuid, summaryFromDb.getOccurrence(0).getActor().getElementUuid());
     }
 
-    //@Test
+    @Test
     public void testReidentifyLongTitle() throws ZepException {
         Event.Builder builder = Event.newBuilder(createUniqueEvent());
         EventActor.Builder actorBuilder = EventActor.newBuilder(builder.getActor());
@@ -856,7 +859,7 @@ public class EventSummaryDaoImplIT extends AbstractTransactionalJUnit4SpringCont
                 summaryFromDb.getOccurrence(0).getActor().getElementTitle());
     }
 
-    //@Test
+    @Test
     public void testReidentifyComponent() throws ZepException, NoSuchAlgorithmException, UnsupportedEncodingException {
         Event.Builder builder = Event.newBuilder(createUniqueEvent());
         EventActor.Builder actorBuilder = EventActor.newBuilder(builder.getActor());
@@ -892,7 +895,7 @@ public class EventSummaryDaoImplIT extends AbstractTransactionalJUnit4SpringCont
         assertArrayEquals(clearHash, clearHashFromDb);
     }
 
-    //@Test
+    @Test
     public void testDeidentifyDevice() throws ZepException {
         EventSummary summary = createSummaryNew(createUniqueEvent());
         Event occurrence = summary.getOccurrence(0);
@@ -906,7 +909,7 @@ public class EventSummaryDaoImplIT extends AbstractTransactionalJUnit4SpringCont
         assertFalse(summaryFromDb.getOccurrence(0).getActor().hasElementUuid());
     }
 
-    //@Test
+    @Test
     public void testDeidentifyComponent() throws ZepException, NoSuchAlgorithmException, UnsupportedEncodingException {
         EventSummary summary = createSummaryNew(createUniqueEvent());
         Event occurrence = summary.getOccurrence(0);
@@ -960,7 +963,7 @@ public class EventSummaryDaoImplIT extends AbstractTransactionalJUnit4SpringCont
         return detailBuilder.build();
     }
 
-    //@Test
+    @Test
     public void testMergeDetailsReplace() throws ZepException {
         Event.Builder eventBuilder = Event.newBuilder(createUniqueEvent());
         eventBuilder.clearDetails();
@@ -989,7 +992,7 @@ public class EventSummaryDaoImplIT extends AbstractTransactionalJUnit4SpringCont
         assertEquals(Arrays.asList("foobar3", "foobaz3"), detailsMap.get("foo3"));
     }
 
-    //@Test
+    @Test
     public void testMergeDetailsAppend() throws ZepException {
         Event.Builder eventBuilder = Event.newBuilder(createUniqueEvent());
         eventBuilder.clearDetails();
@@ -1018,7 +1021,7 @@ public class EventSummaryDaoImplIT extends AbstractTransactionalJUnit4SpringCont
         assertEquals(Arrays.asList("foobar3", "foobaz3"), detailsMap.get("foo3"));
     }
 
-    //@Test
+    @Test
     public void testMergeDetailsUnique() throws ZepException {
         Event.Builder eventBuilder = Event.newBuilder(createUniqueEvent());
         eventBuilder.clearDetails();
@@ -1047,7 +1050,7 @@ public class EventSummaryDaoImplIT extends AbstractTransactionalJUnit4SpringCont
         assertEquals(Arrays.asList("foobar3", "foobaz3"), detailsMap.get("foo3"));
     }
 
-    //@Test
+    @Test
     public void testArchive() throws ZepException {
         EventSummary summary1 = createSummaryNew(createUniqueEvent());
         EventSummary summary2 = createSummary(createUniqueEvent(), EventStatus.STATUS_CLOSED);
@@ -1074,7 +1077,7 @@ public class EventSummaryDaoImplIT extends AbstractTransactionalJUnit4SpringCont
         assertTrue(found2 && found3);
     }
 
-    //@Test
+    @Test
     public void testMergeDetailsNull() throws ZepException {
         Event firstEvent = Event.newBuilder(createUniqueEvent()).clearDetails().build();
 
@@ -1160,7 +1163,7 @@ public class EventSummaryDaoImplIT extends AbstractTransactionalJUnit4SpringCont
         assertEquals(originalBuilder.build(), importedBuilder.build());
     }
 
-    //@Test
+    @Test
     public void testImportEvent() throws ZepException {
         EventSummary summary = EventSummaryDaoImplIT.createRandomSummary();
         this.eventSummaryDao.importEvent(summary);
@@ -1174,7 +1177,7 @@ public class EventSummaryDaoImplIT extends AbstractTransactionalJUnit4SpringCont
         }
     }
 
-    //@Test
+    @Test
     public void testDedupOutOfOrder() throws ZepException {
         Event event = EventTestUtils.createSampleEvent();
         EventSummary eventSummaryFromDb = createSummaryNew(event);
@@ -1208,7 +1211,7 @@ public class EventSummaryDaoImplIT extends AbstractTransactionalJUnit4SpringCont
         assertEquals(oldSummaryForComparison, newSummaryForComparison);
     }
 
-    //@Test
+    @Test
     public void testDedupDetailsOutOfOrder() throws ZepException {
         Event.Builder eventBuilder = Event.newBuilder(EventTestUtils.createSampleEvent());
         eventBuilder.clearDetails();
@@ -1259,7 +1262,7 @@ public class EventSummaryDaoImplIT extends AbstractTransactionalJUnit4SpringCont
      *
      * @throws ZepException
      */
-    //@Test
+    @Test
     public void testMaxEventSizeCreationNormal() throws ZepException {
         int stringStepSize = getStringStepSize();
 
@@ -1292,7 +1295,7 @@ public class EventSummaryDaoImplIT extends AbstractTransactionalJUnit4SpringCont
      *
      * @throws ZepException
      */
-    //@Test
+    @Test
     public void testMaxEventSizeCreationLarge() throws ZepException {
         int stringStepSize = getStringStepSize();
 
@@ -1376,7 +1379,7 @@ public class EventSummaryDaoImplIT extends AbstractTransactionalJUnit4SpringCont
      *
      * @throws org.zenoss.zep.ZepException
      */
-    //@Test
+    @Test
     public void testMaxEventSizeUpdateDropOld() throws ZepException {
         final int stringStepSize = getStringStepSize();
         final Event originalEvent = setupEventForDetails(stringStepSize);
@@ -1412,7 +1415,7 @@ public class EventSummaryDaoImplIT extends AbstractTransactionalJUnit4SpringCont
      *
      * @throws org.zenoss.zep.ZepException
      */
-    //@Test
+    @Test
     public void testMaxEventSizeUpdateDropNew() throws ZepException {
         final int stringStepSize = getStringStepSize();
         final Event originalEvent = setupEventForDetails(stringStepSize);
@@ -1460,7 +1463,7 @@ public class EventSummaryDaoImplIT extends AbstractTransactionalJUnit4SpringCont
      *
      * @throws org.zenoss.zep.ZepException
      */
-    //@Test
+    @Test
     public void testMaxEventSizeUpdateMerge() throws ZepException {
         final int stringStepSize = getStringStepSize();
         final Event originalEvent = setupEventForDetails(stringStepSize);
@@ -1506,8 +1509,8 @@ public class EventSummaryDaoImplIT extends AbstractTransactionalJUnit4SpringCont
                 createdDetails.get("baz_unique").contains(mapOriginalDetails.get("baz_unique").get(0)));
     }
 
-    
-    //@Test
+
+    @Test
     public void testMaxEventSizeUpdateOutOfOrder() throws ZepException {
         final int stringStepSize = getStringStepSize();
         final Event newestEvent = setupEventForDetails(stringStepSize);
@@ -1531,7 +1534,7 @@ public class EventSummaryDaoImplIT extends AbstractTransactionalJUnit4SpringCont
                 newestEvent.getDetailsList(), oldSummary.getOccurrence(0).getDetailsList());
     }
 
-    //@Test
+    @Test
     public void testAgeEligibleEventCount() throws ZepException {
         long initial = eventSummaryDao.getAgeEligibleEventCount(0L, TimeUnit.SECONDS, EventSeverity.SEVERITY_CRITICAL,
                 true);
@@ -1539,13 +1542,13 @@ public class EventSummaryDaoImplIT extends AbstractTransactionalJUnit4SpringCont
         long actual = eventSummaryDao.getAgeEligibleEventCount(0L, TimeUnit.SECONDS, EventSeverity.SEVERITY_CRITICAL,
                 true);
         assertEquals(initial + 1L, actual);
-        
+
         // Test condition where aging is disabled
         assertEquals(0, eventSummaryDao.getAgeEligibleEventCount(0L, TimeUnit.SECONDS, EventSeverity.SEVERITY_CLEAR,
                 false));
     }
 
-    //@Test
+    @Test
     public void testArchiveEligibleEventCount() throws ZepException {
         long initial = eventSummaryDao.getArchiveEligibleEventCount(0L, TimeUnit.SECONDS);
         EventSummary summary = createSummaryNew(EventTestUtils.createSampleEvent());
@@ -1555,8 +1558,8 @@ public class EventSummaryDaoImplIT extends AbstractTransactionalJUnit4SpringCont
         long actual = eventSummaryDao.getArchiveEligibleEventCount(0L, TimeUnit.SECONDS);
         assertEquals(initial + 1L, actual);
     }
-    
-    //@Test
+
+    @Test
     public void testNoExceptionWhenNoClearHashes() throws ZepException {
         Event event = Event.newBuilder(EventTestUtils.createSampleEvent()).setSeverity(EventSeverity.SEVERITY_CLEAR)
                 .build();
@@ -1591,7 +1594,7 @@ public class EventSummaryDaoImplIT extends AbstractTransactionalJUnit4SpringCont
         });
     }
 
-    //@Test
+    @Test
     public void testIncomingEventCount() throws ZepException {
         Event event = Event.newBuilder(EventTestUtils.createSampleEvent()).setCount(500).build();
         String uuid = eventSummaryDao.create(event, new EventPreCreateContextImpl());
@@ -1603,7 +1606,7 @@ public class EventSummaryDaoImplIT extends AbstractTransactionalJUnit4SpringCont
         assertEquals(1500, eventSummary.getCount());
     }
 
-    //@Test
+    @Test
     public void testIncomingFirstTime() throws ZepException {
         long oneHourAgo = System.currentTimeMillis() - TimeUnit.MINUTES.toMillis(60);
         Event event = Event.newBuilder(EventTestUtils.createSampleEvent()).setFirstSeenTime(oneHourAgo).setCount(5)

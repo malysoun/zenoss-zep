@@ -1,10 +1,10 @@
 /*****************************************************************************
- * 
+ *
  * Copyright (C) Zenoss, Inc. 2010, all rights reserved.
- * 
+ *
  * This content is made available according to terms specified in
  * License.zenoss under the directory where your Zenoss product is installed.
- * 
+ *
  ****************************************************************************/
 
 
@@ -58,7 +58,7 @@ public class EventProcessorImpl implements EventProcessor {
 
     /**
      * Sets the plug-in service used to look up configured plug-ins.
-     * 
+     *
      * @param pluginService
      *            The plug-in service to use to look up configured plug-ins.
      */
@@ -110,11 +110,11 @@ public class EventProcessorImpl implements EventProcessor {
         logger.debug("processEventMessages: count={}", messages.size());
         List<EventWithContext> eventList = messagesToEvents(messages);
         List<Map.Entry<String, Event>> results = Collections.emptyList();
-	try{
-	    results = this.eventSummaryDao.batchCreate(eventList);
-	}catch(DuplicateKeyException e){
-	    results = this.eventSummaryDao.batchCreate(eventList);
-	}
+        try {
+            results = this.eventSummaryDao.batchCreate(eventList);
+        } catch(DuplicateKeyException e){
+            results = this.eventSummaryDao.batchCreate(eventList);
+        }
         for (Map.Entry<String, Event>result : results) {
             String uuid = result.getKey();
             Event event = result.getValue();
