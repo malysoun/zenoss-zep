@@ -336,25 +336,28 @@ public class EventSummaryDaoImpl implements EventSummaryDao {
             myEvents.add(new EventWithContext(ectx.event, ectx.getContext()));
         }
 
-        try {
+	//        try {
+	    logger.info("Calling batch create");
             batchCreateEventWithContext(myEvents);
-        } catch (DuplicateKeyException e) {
+	    // } catch (DuplicateKeyException e) {
             // Catch DuplicateKeyException and retry creating the event. Otherwise, the failure
             // will propagate to the AMQP consumer, the message will be rejected (and re-queued),
             // leading to unnecessary load on the AMQP server re-queueing/re-delivering the event.
             //use original list since the contents of myEvents may have been changed
-            logger.info("DuplicateKeyException - retrying event batch : {}", e);
-            batchCreateEventWithContext(eventList);
-            myEvents = eventList;
-        }
-
+	    // logger.info("DuplicateKeyException - retrying event batch : {}", e.getMessage());
+	    // batchCreateEventWithContext(eventList);
+	    // myEvents = eventList;
+	    //}
         List<Map.Entry<String, Event>> results = new ArrayList<Map.Entry<String, Event>>();
         for (EventWithContext ectx : myEvents) {
+
             if (ectx.summary.getUuid() != null) {
                 Map.Entry<String, Event> result = new AbstractMap.SimpleEntry<String, Event>(ectx.summary.getUuid(), ectx.getEvent());
                 results.add(result);
             }
         }
+	logger.info("batch create results {}", results );
+
         return results;
     }
 
@@ -493,14 +496,17 @@ public class EventSummaryDaoImpl implements EventSummaryDao {
                         public Void call() throws Exception {
                             //lock table for updates
 
+			    logger.info("waiting for update lock");
                             synchronized (forUpdateLock) {
                                 for (EventWithContext ectx : events) {
                                     byte[] fingerprintHash = ectx.fingerprintHash;
+				    logger.info("getting lock");
                                     final List<EventSummary.Builder> oldSummaryList = template.getJdbcOperations().query(
                                             "SELECT event_count,first_seen,last_seen,details_json,status_id,status_change,uuid" +
                                                     " FROM event_summary WHERE fingerprint_hash=? FOR UPDATE",
                                             new RowMapperResultSetExtractor<EventSummary.Builder>(eventDedupMapper, 1),
                                             fingerprintHash);
+				    logger.info("GOT lock");
                                     final EventSummary.Builder summary;
                                     ectx.oldSummaryList = oldSummaryList;
                                     if (!oldSummaryList.isEmpty()) {
@@ -518,6 +524,9 @@ public class EventSummaryDaoImpl implements EventSummaryDao {
                                         if (events == null) {
                                             events = Collections.EMPTY_LIST;
                                         }
+	
+                                        logger.info("deduping events got list {}", events);
+
                                         ectx.dedupingEvents = events;
                                     }
                                 }
@@ -579,7 +588,10 @@ public class EventSummaryDaoImpl implements EventSummaryDao {
             );
         } catch (ZepException e) {
             throw e;
+	} catch (DuplicateKeyException e){
+	    throw e;
         } catch (Exception e) {
+	    logger.info("caught exception {}", e.getMessage());
             throw new ZepException(e);
         }
     }

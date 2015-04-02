@@ -32,6 +32,7 @@ import org.zenoss.zep.plugins.EventPreCreatePlugin;
 
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 
@@ -108,9 +109,12 @@ public class EventProcessorImpl implements EventProcessor {
     public void processEventMessages(Collection<org.zenoss.amqp.Message<Message>> messages) throws ZepException {
         logger.debug("processEventMessages: count={}", messages.size());
         List<EventWithContext> eventList = messagesToEvents(messages);
-
-        List<Map.Entry<String, Event>> results = this.eventSummaryDao.batchCreate(eventList);
-
+        List<Map.Entry<String, Event>> results = Collections.emptyList();
+	try{
+	    results = this.eventSummaryDao.batchCreate(eventList);
+	}catch(DuplicateKeyException e){
+	    results = this.eventSummaryDao.batchCreate(eventList);
+	}
         for (Map.Entry<String, Event>result : results) {
             String uuid = result.getKey();
             Event event = result.getValue();
