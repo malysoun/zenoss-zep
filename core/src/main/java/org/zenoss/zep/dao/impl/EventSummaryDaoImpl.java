@@ -24,6 +24,7 @@ import org.springframework.jdbc.core.RowMapperResultSetExtractor;
 import org.springframework.jdbc.core.simple.SimpleJdbcInsert;
 import org.springframework.jdbc.core.simple.SimpleJdbcOperations;
 import org.springframework.jdbc.support.MetaDataAccessException;
+import org.springframework.transaction.support.TransactionSynchronization;
 import org.springframework.transaction.support.TransactionSynchronizationAdapter;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.springframework.util.StringUtils;
@@ -119,8 +120,8 @@ public class EventSummaryDaoImpl implements EventSummaryDao {
 
     private Counters counters;
     private WorkQueue eventIndexQueue;
-    private Object createSingleLock = new Object();
-    private Object forUpdateLock = new Object();
+    private final Object createSingleLock = new Object();
+    private final Object forUpdateLock = new Object();
 
     public EventSummaryDaoImpl(DataSource dataSource) throws MetaDataAccessException {
         this.dataSource = dataSource;
@@ -472,8 +473,7 @@ public class EventSummaryDaoImpl implements EventSummaryDao {
             uuids.add(uuid);
         }
 
-        indexSignal(uuids, System.currentTimeMillis());
-        return;
+        indexSignal(uuids);
     }
 
     private Map<String, Object> getInsertFields(EventSummaryOrBuilder summary, EventPreCreateContext context,
@@ -565,7 +565,7 @@ public class EventSummaryDaoImpl implements EventSummaryDao {
                                         isNewer = merge(summary, event) || isNewer;
                                     }
                                 } else {
-                                    isNewer = merge(ectx.summary, ectx.event) || isNewer;
+                                    isNewer = merge(ectx.summary, ectx.event);
                                 }
                                 summary.setUpdateTime(System.currentTimeMillis());
 //                                    final long dedupCount;
@@ -761,7 +761,7 @@ public class EventSummaryDaoImpl implements EventSummaryDao {
 
 
     /**
-     * @param events
+     * @param events the list of events to clear
      * @return all UUIDs that will be cleared
      * @throws ZepException
      */
@@ -776,6 +776,7 @@ public class EventSummaryDaoImpl implements EventSummaryDao {
             }
 
         }
+
         try {
             batchClearEvents2(clearEvents);
         } catch (ZepException e) {
@@ -783,6 +784,7 @@ public class EventSummaryDaoImpl implements EventSummaryDao {
         } catch (Exception e) {
             throw new ZepException(e);
         }
+
         //drop any events that didn't clear another
         for (EventWithContext ectx : clearEvents) {
             if (ectx.clearUUIDs.isEmpty()) {
@@ -939,7 +941,7 @@ public class EventSummaryDaoImpl implements EventSummaryDao {
 
         String indexSql = "SELECT uuid FROM event_summary "
                 + "WHERE element_uuid IS NULL AND element_type_id=:_type_id AND element_identifier=:_id";
-        this.indexResults(indexSql, fields, System.currentTimeMillis());
+        this.indexResults(indexSql, fields);
 
         int numRows = 0;
         String updateSql = "UPDATE event_summary SET element_uuid=:_uuid, element_title=:_title," +
@@ -954,7 +956,7 @@ public class EventSummaryDaoImpl implements EventSummaryDao {
                     "LEFT JOIN event_key ON es.event_key_id = event_key.id " +
                     "WHERE es.element_uuid=:_parent_uuid AND es.element_sub_uuid IS NULL AND " +
                     "es.element_sub_type_id=:_type_id AND es.element_sub_identifier=:_id";
-            this.indexResults(indexSql, fields, System.currentTimeMillis());
+            this.indexResults(indexSql, fields);
 
             String selectSql = "SELECT uuid,element_identifier,element_sub_identifier," +
                     "event_class.name AS event_class_name,event_key.name AS event_key_name FROM event_summary es" +
@@ -993,7 +995,7 @@ public class EventSummaryDaoImpl implements EventSummaryDao {
         fields.put(COLUMN_UPDATE_TIME, timestampConverter.toDatabaseType(updateTime));
 
         String indexSql = "SELECT uuid FROM event_summary WHERE element_uuid=:_uuid";
-        this.indexResults(indexSql, fields, updateTime);
+        this.indexResults(indexSql, fields);
 
         int numRows = 0;
         String updateElementSql = "UPDATE event_summary SET element_uuid=NULL, update_time=:update_time" +
@@ -1001,7 +1003,7 @@ public class EventSummaryDaoImpl implements EventSummaryDao {
         numRows += this.template.update(updateElementSql, fields);
 
         indexSql = "SELECT uuid FROM event_summary WHERE element_sub_uuid=:_uuid";
-        this.indexResults(indexSql, fields, updateTime);
+        this.indexResults(indexSql, fields);
 
         String selectSql = "SELECT uuid,element_identifier,element_sub_identifier," +
                 "event_class.name AS event_class_name,event_key.name AS event_key_name FROM event_summary es" +
@@ -1140,7 +1142,7 @@ public class EventSummaryDaoImpl implements EventSummaryDao {
                     " WHERE last_seen < :last_seen AND" +
                     " severity_id IN (:_severity_ids) AND" +
                     " closed_status = FALSE LIMIT :_limit";
-            this.indexResults(indexSql, fields, now);
+            this.indexResults(indexSql, fields);
 
             // Use UPDATE ... LIMIT
             updateSql = "UPDATE event_summary SET" +
@@ -1153,7 +1155,7 @@ public class EventSummaryDaoImpl implements EventSummaryDao {
                     " WHERE uuid IN (SELECT uuid FROM event_summary WHERE" +
                     " last_seen < :last_seen AND severity_id IN (:_severity_ids)" +
                     " AND closed_status = FALSE LIMIT :_limit)";
-            this.indexResults(indexSql, fields, now);
+            this.indexResults(indexSql, fields);
 
             // Use UPDATE ... WHERE pk IN (SELECT ... LIMIT)
             updateSql = "UPDATE event_summary SET" +
@@ -1181,8 +1183,7 @@ public class EventSummaryDaoImpl implements EventSummaryDao {
     @TransactionalRollbackAllExceptions
     @Timed
     public int addNote(String uuid, EventNote note) throws ZepException {
-        final long updateTime = System.currentTimeMillis();
-        this.indexSignal(uuid, updateTime);
+        this.indexSignal(uuid);
 
         return this.eventDaoHelper.addNote(TABLE_EVENT_SUMMARY, uuid, note, template);
     }
@@ -1192,8 +1193,7 @@ public class EventSummaryDaoImpl implements EventSummaryDao {
     @Timed
     public int updateDetails(String uuid, EventDetailSet details)
             throws ZepException {
-        final long updateTime = System.currentTimeMillis();
-        this.indexSignal(uuid, updateTime);
+        this.indexSignal(uuid);
 
         return this.eventDaoHelper.updateDetails(TABLE_EVENT_SUMMARY, uuid, details.getDetailsList(), template);
     }
@@ -1310,7 +1310,7 @@ public class EventSummaryDaoImpl implements EventSummaryDao {
         String selectSql = sb.toString() + sbw.toString() + " FOR UPDATE";
 
         if (sendIndexSignal) {
-            this.indexSignal(uuids, System.currentTimeMillis());
+            this.indexSignal(uuids);
         }
         /*
          * If this is a significant status change, also add an audit note
@@ -1369,6 +1369,11 @@ public class EventSummaryDaoImpl implements EventSummaryDao {
                 updateFields.put(COLUMN_FINGERPRINT_HASH, DaoUtils.sha1(newFingerprint));
                 updateFields.put(COLUMN_AUDIT_JSON, updatedAuditJson);
                 updateFields.put(COLUMN_UUID, rs.getObject(COLUMN_UUID));
+
+                // FIXME: do we need this at all? or only do this if sendIndexSignal?
+                // String uuid = uuidConverter.fromDatabaseType(rs, COLUMN_UUID);
+                // indexSignal(uuid);
+
                 return updateFields;
             }
         }, fields);
@@ -1517,9 +1522,8 @@ public class EventSummaryDaoImpl implements EventSummaryDao {
             }
         }
 
-        final long updateTime = System.currentTimeMillis();
         /* signal event_summary table rows to get indexed */
-        this.indexSignal(uuids, System.currentTimeMillis());
+        this.indexSignal(uuids);
 
         String insertSql = String.format("INSERT INTO event_archive (%s) SELECT %s FROM event_summary" +
                         " WHERE uuid IN (:_uuids) AND closed_status = TRUE ON DUPLICATE KEY UPDATE summary=event_summary.summary",
@@ -1570,7 +1574,7 @@ public class EventSummaryDaoImpl implements EventSummaryDao {
         this.insert.execute(fields);
     }
 
-    private void indexResults(final String sql, final Map<String, ?> fields, long updateTime) throws ZepException {
+    private void indexResults(final String sql, final Map<String, ?> fields) throws ZepException {
         List<String> ids = this.template.query(sql, new RowMapper<String>() {
             @Override
             public String mapRow(ResultSet rs, int rowNum)
@@ -1578,32 +1582,39 @@ public class EventSummaryDaoImpl implements EventSummaryDao {
                 return uuidConverter.fromDatabaseType(rs, COLUMN_UUID);
             }
         }, fields);
-        this.indexSignal(ids, updateTime);
+        this.indexSignal(ids);
     }
 
-    private void indexSignal(final String eventUuid, final long updateTime) {
-        this.indexSignal(Collections.singletonList(eventUuid), updateTime);
+    private void indexSignal(final String eventUuid) {
+        this.indexSignal(Collections.singletonList(eventUuid));
     }
 
-    private void indexSignal(final Collection<String> eventUuids, final long updateTime) {
+    private void indexSignal(final Collection<String> eventUuids) {
         if (!txSynchronizedQueue) {
-            doIndexSignal(eventUuids, updateTime);
+            doIndexSignal(eventUuids);
             return;
         }
 
-        TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronizationAdapter() {
-            @Override
-            public void afterCommit() {
-                doIndexSignal(eventUuids, updateTime);
+        IndexQueueSynchronizer idxSync = null;
+        for (TransactionSynchronization sync : TransactionSynchronizationManager.getSynchronizations()) {
+            if (sync instanceof IndexQueueSynchronizer) {
+                idxSync = (IndexQueueSynchronizer) sync;
+                break;
             }
-        });
+        }
+        if (idxSync == null) {
+            idxSync = new IndexQueueSynchronizer();
+            TransactionSynchronizationManager.registerSynchronization(idxSync);
+        }
+        idxSync.uuids.addAll(eventUuids);
     }
 
-    private void doIndexSignal(final Collection<String> eventUuids, final long updateTime) {
+    private void doIndexSignal(final Collection<String> eventUuids) {
         if (eventUuids.isEmpty()) {
             return;
         }
 
+        Long updateTime = System.currentTimeMillis();
         List<EventIndexBackendTask> tasks = Lists.newArrayListWithCapacity(eventUuids.size());
         for (String uuid : eventUuids) {
             tasks.add(EventIndexBackendTask.Index(uuid, updateTime));
@@ -1611,5 +1622,12 @@ public class EventSummaryDaoImpl implements EventSummaryDao {
         eventIndexQueue.addAll(tasks);
     }
 
+    private class IndexQueueSynchronizer extends TransactionSynchronizationAdapter {
+        TreeSet<String> uuids = new TreeSet<String>();
 
+        @Override
+        public void afterCommit() {
+            doIndexSignal(uuids);
+        }
+    }
 }
