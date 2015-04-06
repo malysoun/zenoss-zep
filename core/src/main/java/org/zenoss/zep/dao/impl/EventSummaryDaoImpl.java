@@ -386,6 +386,10 @@ public class EventSummaryDaoImpl implements EventSummaryDao {
         List<EventWithContext> closed = new ArrayList<EventWithContext>();
         List<EventWithContext> openEvents = new ArrayList<EventWithContext>();
         for (EventWithContext ectx : eventList) {
+            if (ectx.dropped) {
+                continue;
+            }
+
             Event event = ectx.getEvent();
             final String fingerprint = DaoUtils.truncateStringToUtf8(event.getFingerprint(), MAX_FINGERPRINT);
             ectx.fingerprint = fingerprint;
@@ -397,9 +401,11 @@ public class EventSummaryDaoImpl implements EventSummaryDao {
                 openEvents.add(ectx);
             }
         }
+
         if (!closed.isEmpty()) {
             batchSaveEventByFingerprint(closed, false);
         }
+
         if (!openEvents.isEmpty()) {
             for (EventWithContext ectx : eventList) {
 
@@ -435,6 +441,10 @@ public class EventSummaryDaoImpl implements EventSummaryDao {
 
         TreeSet<String> uuids = new TreeSet<String>();
         for (EventWithContext ectx : eventList) {
+            if (ectx.dropped) {
+                continue;
+            }
+
             final String uuid = ectx.summary == null ? null : ectx.summary.getUuid();
             final List<String> clearedEventUuids = ectx.clearUUIDs;
             uuids.addAll(ectx.clearUUIDs);

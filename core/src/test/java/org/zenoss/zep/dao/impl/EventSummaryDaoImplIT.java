@@ -112,6 +112,17 @@ public class EventSummaryDaoImplIT extends AbstractTransactionalJUnit4SpringCont
         return eventList;
     }
 
+    private List<EventWithContext> createBatchOfSameEvents() {
+        final int BATCH_SIZE = 10;
+        final Event event = EventTestUtils.createSampleEvent();
+        List<EventWithContext> eventList = new ArrayList<EventWithContext>(BATCH_SIZE);
+        for (int i = 0; i < BATCH_SIZE; i++) {
+            EventPreCreateContext context = new EventPreCreateContextImpl();
+            eventList.add(new EventWithContext(event, context));
+        }
+        return eventList;
+    }
+
     private static void compareEvents(Event event, Event eventFromDb) {
         Event event1 = Event.newBuilder().mergeFrom(event).clearUuid()
                 .clearCreatedTime().clearTags().addAllTags(EventDaoHelper.buildTags(event)).build();
@@ -280,6 +291,7 @@ public class EventSummaryDaoImplIT extends AbstractTransactionalJUnit4SpringCont
         assertBatchResults(eventList.size(), results);
     }
 
+    // Run a different of batch of events on each of 10 different threads
     @Test
     public void testSummaryBatchMultiThread() throws ZepException, InterruptedException, ExecutionException {
         int poolSize = 10;
@@ -287,7 +299,6 @@ public class EventSummaryDaoImplIT extends AbstractTransactionalJUnit4SpringCont
         ExecutorService executorService = Executors.newFixedThreadPool(poolSize);
         ExecutorCompletionService<List<Map.Entry<String, Event>>> ecs = new ExecutorCompletionService<List<Map.Entry<String, Event>>>(executorService);
 
-        // Run a different of batch of events on each of 10 different threads
         List<List<EventWithContext>> listOfInputLists = new ArrayList<List<EventWithContext>>();
         for (int i = 0; i < poolSize; i++) {
             final List<EventWithContext> eventList = createBatchOfDifferentEvents();
@@ -325,6 +336,7 @@ public class EventSummaryDaoImplIT extends AbstractTransactionalJUnit4SpringCont
         }
     }
 
+    // Run the same batch of events on each of 10 different threads
     @Test
     public void testSummaryBatchMultiThreadDedup() throws ZepException, InterruptedException, ExecutionException {
         int poolSize = 10;
@@ -359,6 +371,45 @@ public class EventSummaryDaoImplIT extends AbstractTransactionalJUnit4SpringCont
         assertEquals("unique UUID count is incorrect", eventList.size(), uuids.size());
         for (String uuid : uuids) {
             assertEquals("event count is incorrect", poolSize, this.eventSummaryDao.findByUuid(uuid).getCount());
+        }
+    }
+
+    // Run the same batch of *duplicate* events on each of 10 different threads
+    @Test
+    public void testSummaryBatchMultiThreadSuperDedup() throws ZepException, InterruptedException, ExecutionException {
+        int poolSize = 10;
+        final CyclicBarrier barrier = new CyclicBarrier(poolSize);
+        ExecutorService executorService = Executors.newFixedThreadPool(poolSize);
+        ExecutorCompletionService<List<Map.Entry<String, Event>>> ecs = new ExecutorCompletionService<List<Map.Entry<String, Event>>>(executorService);
+        final List<EventWithContext> eventList = createBatchOfSameEvents();
+
+        for (int i = 0; i < poolSize; i++) {
+            ecs.submit(new Callable<List<Map.Entry<String, Event>>>() {
+                @Override
+                public List<Map.Entry<String, Event>> call() throws Exception {
+                    barrier.await();
+                    // simulate EventProcessorImpl.processEvent() to handle expected exceptions associated
+                    //      with adding/updating duplicate events concurrently
+                    try {
+                        return eventSummaryDao.batchCreate(eventList);
+                    } catch (DuplicateKeyException e){
+                        return eventSummaryDao.batchCreate(eventList);
+                    }
+                }
+            });
+        }
+
+        // FIXME: This test deadlocks
+        List<List<Map.Entry<String, Event>>> listOfResults = new ArrayList<List<Map.Entry<String, Event>>>();
+        for (int i = 0; i < poolSize; i++) {
+            listOfResults.add(ecs.take().get());
+        }
+
+        final int expectedRepitionCount = poolSize * eventList.size();
+        Set<String> uuids = getUniqueUuids(listOfResults);
+        assertEquals("unique UUID count is incorrect", 1, uuids.size());
+        for (String uuid : uuids) {
+            assertEquals("event count is incorrect", expectedRepitionCount, this.eventSummaryDao.findByUuid(uuid).getCount());
         }
     }
 
